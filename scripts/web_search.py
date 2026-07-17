@@ -1,7 +1,7 @@
+# -*- coding: utf-8 -*-
 # Lincoln Web Search Tool
 # Searches DuckDuckGo and fetches page content for injection into Qwen context
 
-# -*- coding: utf-8 -*-
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 import requests
@@ -25,7 +25,7 @@ def fetch(url):
     print(f"\n--- Fetching: {url} ---\n")
     
     headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers, timeout=10)
+    response = requests.get(url, headers=headers, timeout=30)
     soup = BeautifulSoup(response.text, "html.parser")
     
     for element in soup(["script", "style"]):
@@ -35,26 +35,29 @@ def fetch(url):
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     clean_text = "\n".join(lines)
     
-    print(clean_text[:3000])
+    print(clean_text)
     print("\n--- End of fetched content ---")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2:
         print("Usage:")
-        print("  Search: python scripts/tools/web_search.py search 'your query'")
-        print("  Search with results: python scripts/tools/web_search.py search 'your query' 10")
-        print("  Fetch:  python scripts/tools/web_search.py fetch 'https://url.com'")
+        print("  /run websearch query terms here")
+        print("  /run websearch query terms here 10")
+        print("  /run websearch fetch https://url.com")
         sys.exit(1)
-        
-    command = sys.argv[1]
-    argument = sys.argv[2]
-    
-    # Dynamic results - default 5, override with third argument
-    max_results = int(sys.argv[3]) if len(sys.argv) > 3 else 5
-    
-    if command == "search":
-        search(argument, max_results)
-    elif command == "fetch":
-        fetch(argument)
+
+    args = sys.argv[1:]
+
+    # Fetch mode
+    if args[0].lower() == "fetch":
+        fetch(args[1])
+
     else:
-        print(f"Unknown command: {command}. Use 'search' or 'fetch'.")
+        # Everything is the query except last arg if it is a number
+        if args[-1].isdigit():
+            count = int(args[-1])
+            query = " ".join(args[:-1])
+        else:
+            count = 5
+            query = " ".join(args)
+        search(query, count)
