@@ -10,11 +10,13 @@ if "%1"=="--help" (
     echo   lincoln --help       Show this help message
     echo.
     echo INSIDE LINCOLN PROMPT:
+    echo   /run lhelp                                             Show Lincoln help
     echo   /ask "question"                                        Get suggestions from LLM
-    echo   /run python scripts\web_search.py search "query"      Search web, 5 results
-    echo   /run python scripts\web_search.py search "query" 10   Custom result count
-    echo   /run python scripts\web_search.py fetch "url"         Fetch full page
-    echo   /run python scripts\rag_query.py "question"           Query Project 1 index
+    echo   /run rag "question"                                    Query Project 1 index
+    echo   /run rag "question" --top-k 8                         Query with more chunks
+    echo   /run websearch search "query"                         Search web, 5 results
+    echo   /run websearch search "query" 10                      Custom result count
+    echo   /run websearch fetch "url"                            Fetch full page
     echo   /add filepath                                          Add file to context
     echo   /drop filepath                                         Remove file from context
     echo   /exit                                                  Close Lincoln
