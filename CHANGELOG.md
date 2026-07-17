@@ -23,3 +23,10 @@ terminal> lincoln  opens lincoln from the batch file with preset model and chang
 /add [directory] to give the file relevant to the ai
 /drop [file] to remove context
 /exit - close lincoln
+
+- Fixed lincoln.bat with /d flag for cross-drive launching
+- Added lincoln.bat to Windows PATH - lincoln now launches from anywhere
+- Confirmed /ask workflow operational
+- Written build_decisions/decision-001-stack-selection.md
+- README.md completed
+- Identified future capability: date/time tool for Qwen
