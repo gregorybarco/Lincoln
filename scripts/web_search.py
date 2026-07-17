@@ -1,7 +1,9 @@
 # Lincoln Web Search Tool
 # Searches DuckDuckGo and fetches page content for injection into Qwen context
 
+# -*- coding: utf-8 -*-
 import sys
+sys.stdout.reconfigure(encoding='utf-8')
 import requests
 from bs4 import BeautifulSoup
 from ddgs import DDGS

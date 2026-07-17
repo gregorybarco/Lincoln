@@ -30,3 +30,11 @@ terminal> lincoln  opens lincoln from the batch file with preset model and chang
 - Written build_decisions/decision-001-stack-selection.md
 - README.md completed
 - Identified future capability: date/time tool for Qwen
+
+## 2026-07-17 - Session 1 Extended
+
+- Installed ddgs package (duckduckgo_search renamed to ddgs)
+- Built scripts/tools/web_search.py with dynamic result count
+- Confirmed search capability working against QuantLib finance queries
+- Confirmed fetch capability retrieving clean page text
+- Created build_decisions/002_web_access_approach.md
