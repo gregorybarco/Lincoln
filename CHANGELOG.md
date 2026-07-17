@@ -38,3 +38,26 @@ terminal> lincoln  opens lincoln from the batch file with preset model and chang
 - Confirmed search capability working against QuantLib finance queries
 - Confirmed fetch capability retrieving clean page text
 - Created build_decisions/002_web_access_approach.md
+
+## 2026-07-17 - Session 1 Final
+
+- Confirmed /run command integrates websearch directly into Qwen context
+- Full agentic loop working - one terminal, no copying, no manual steps
+- Fixed Unicode encoding in web_search.py for mathematical symbols
+- Reorganized all scripts into single scripts\ folder
+- Added websearch.bat single word command
+- Added --help to lincoln and websearch commands
+- Removed stale git paths after file reorganization
+- Tested Hull White Monte Carlo search - Qwen reasoned over live results
+
+### Lincoln Capabilities At End Of Session 1
+- lincoln        : launches AI agent
+- websearch      : web search and fetch integrated into Qwen context
+- /ask           : suggestion only interaction
+- /add           : add files to context
+- /run           : execute tools and inject results into Qwen
+- /exit          : close Lincoln
+
+### Next Session
+- RAG pipeline planning and implementation
+- Connect Lincoln to mathematical finance project automatically
