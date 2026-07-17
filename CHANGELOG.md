@@ -70,3 +70,35 @@ terminal> lincoln  opens lincoln from the batch file with preset model and chang
 - Qwen produced rigorous comparative analysis of Hull White simulation approaches
 - Mathematical notation preserved through full pipeline
 - Lincoln operational as research and analysis agent
+
+## [0.3.0] - 2026-07-17
+
+### Added
+- RAG pipeline: LlamaIndex + ChromaDB + nomic-embed-text
+  - 75 files indexed (37 Python, 38 Fortran) from B:\OptionsPricing
+  - 1,156 vectors stored in persistent ChromaDB at data\chroma_db\
+  - Incremental re-indexing via SHA-256 hash cache
+  - Full security exclusion list mirroring Project 1 .gitignore
+  - Dry-run flag for safe pre-index verification
+- main_configuration\config.py — central configuration, single source of truth
+- main_configuration\__init__.py — makes config an importable package
+- scripts\rag_indexer.py — indexes Project 1 source into ChromaDB
+- scripts\rag_query.py — queries index, synthesizes answers via Qwen
+- scripts\rag.bat — /run rag shortcut inside Aider
+- scripts\lhelp.bat — /run lhelp shortcut inside Aider
+- ADR-005: RAG pipeline architecture and security design
+
+### Changed
+- scripts\lincoln.bat — updated help text with all current commands
+- scripts\lincoln_shell.py — added /rag command handler and [lincoln]> prompt
+- .env — added LINCOLN_LLM_MODEL, LINCOLN_EMBED_MODEL, LINCOLN_PROJECT_PATH
+- main_configuration\config.py replaces all scattered model hardcodes
+
+### Security
+- Verified zero secrets exposure — tokens\, secrets\, .env excluded from index
+- Confirmed all 75 indexed files contain no hardcoded credentials
+- All embedding and inference via localhost:11434 — zero cloud exposure
+
+### Next
+- MLflow experiment tracking setup
+- QLoRA fine tuning on RTX 5060 Ti 16GB
