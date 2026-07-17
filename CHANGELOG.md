@@ -17,3 +17,9 @@
 
 ### Status
 Lincoln is operational. Next session: write first build decision document, then begin RAG pipeline planning.
+terminal> lincoln  opens lincoln from the batch file with preset model and change directories and the local host
+
+/ask = to ask lincoln a question
+/add [directory] to give the file relevant to the ai
+/drop [file] to remove context
+/exit - close lincoln
