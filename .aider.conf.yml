@@ -1,0 +1,4 @@
+model: ollama/qwen3.5:9b
+no-auto-commits: true
+dry-run: true
+env-file: .env

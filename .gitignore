@@ -182,3 +182,4 @@ cython_debug/
 
 # Aider tools for Agentic AI enabling
 .aider*
+!.aider.conf.yml
