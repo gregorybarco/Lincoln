@@ -226,11 +226,15 @@ def build_messages_with_rag_context(
         List of message dicts ready to pass to chat() or stream_chat()
     """
     system_content = (
-        f"You are Lincoln, a local AI assistant with deep knowledge of "
-        f"the {project_name} codebase. "
+        f"You are Lincoln, a local AI assistant. "
+        f"{'You have deep knowledge of the ' + project_name + ' codebase. ' if project_name else ''}"
         f"You help with coding, analysis, and reasoning. "
         f"You never modify files without explicit approval. "
         f"You are running fully locally — no data leaves this machine.\n\n"
+        f"Formatting rules: respond conversationally for questions and explanations. "
+        f"Use markdown sparingly — only use code blocks for actual code, "
+        f"bullet points only for genuine lists, headers only for long structured documents. "
+        f"Do NOT bold every other phrase or use emojis in technical responses.\n\n"
     )
 
     if rag_context:

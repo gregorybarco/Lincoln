@@ -34,7 +34,8 @@ const lincolnSidebar = (() => {
       _renderProjects(projects);
 
       if (!_activeProjectId && projects.length > 0) {
-        selectProject(projects[0].id, projects[0]);
+        // Don't auto-select — start with no project selected
+        _showNoProjectHome();
       }
       if (projects.length === 0) {
         document.getElementById('projectList').innerHTML =
@@ -45,10 +46,33 @@ const lincolnSidebar = (() => {
     }
   }
 
+  function _showNoProjectHome() {
+    // Show general chat home when no project is selected
+    if (typeof lincolnChat !== 'undefined') {
+      lincolnChat.setActiveProject(null, null);
+      lincolnChat.newSession();
+    }
+  }
+
   function _renderProjects(projects) {
     const list = document.getElementById('projectList');
     if (!list) return;
-    list.innerHTML = projects.map(p => `
+
+    // "General" — no project selected
+    const generalActive = !_activeProjectId;
+    let html = `
+      <div class="sidebar-project-item ${generalActive ? 'active' : ''}"
+           id="projectItemGeneral"
+           onclick="lincolnSidebar.selectNoProject()">
+        <div class="project-dot ${generalActive ? 'active' : ''}"></div>
+        <div class="project-info">
+          <div class="project-name">General</div>
+          <div class="project-meta">No project — open chat</div>
+        </div>
+      </div>
+    `;
+
+    html += projects.map(p => `
       <div class="sidebar-project-item ${p.id === _activeProjectId ? 'active' : ''}"
            id="projectItem_${p.id}"
            onclick="lincolnSidebar.selectProject(${p.id}, ${JSON.stringify(p).replace(/"/g, '&quot;')})">
@@ -66,6 +90,30 @@ const lincolnSidebar = (() => {
         </button>
       </div>
     `).join('');
+
+    list.innerHTML = html;
+  }
+
+  function selectNoProject() {
+    _activeProjectId = null;
+    _activeProject   = null;
+
+    document.querySelectorAll('.sidebar-project-item').forEach(el => {
+      el.classList.remove('active');
+      el.querySelector('.project-dot')?.classList.remove('active');
+    });
+    document.getElementById('projectItemGeneral')?.classList.add('active');
+    document.getElementById('projectItemGeneral')?.querySelector('.project-dot')?.classList.add('active');
+
+    const badge = document.getElementById('topbarProjectBadge');
+    if (badge) badge.textContent = 'No project';
+
+    if (typeof lincolnChat !== 'undefined') {
+      lincolnChat.setActiveProject(null, null);
+      lincolnChat.newSession();
+    }
+    if (typeof lincolnCanvas !== 'undefined') lincolnCanvas.clear();
+    loadHistory();
   }
 
   function selectProject(projectId, project) {
@@ -555,6 +603,7 @@ const lincolnSidebar = (() => {
     loadProjects,
     loadHistory,
     selectProject,
+    selectNoProject,
     openProjectSettings,
     closeProjectSettings,
     toggleWriteAccess,

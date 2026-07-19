@@ -50,21 +50,11 @@ const lincolnChat = (() => {
   }
 
   async function newSession() {
-    // Explicit new session — called by the "+ New chat" button
-    try {
-      const res     = await fetch('/api/chat/session', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ project_id: _activeProjectId }),
-      });
-      const session = await res.json();
-      _sessionId    = session.id;
-      _clearMessages();
-      _clearPendingFile();
-      if (typeof lincolnCanvas !== 'undefined') lincolnCanvas.clear();
-    } catch (err) {
-      console.error('Failed to create session:', err);
-    }
+    // Show home screen — session created lazily on first message
+    _sessionId = null;
+    _clearMessages();
+    _clearPendingFile();
+    if (typeof lincolnCanvas !== 'undefined') lincolnCanvas.clear();
   }
 
   async function loadSession(sessionId) {
@@ -401,6 +391,22 @@ const lincolnChat = (() => {
   }
 
 
+  // ── Markdown rendering ────────────────────────────────────────────────────
+  // Uses marked.js (loaded via CDN) for full markdown support.
+  // Falls back to plain text if marked is not available.
+
+  function _md(text) {
+    if (typeof marked !== 'undefined') {
+      return marked.parse(text || '', { breaks: true, gfm: true });
+    }
+    // Fallback — basic inline formatting only
+    return _esc(text)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n/g, '<br>');
+  }
+
+
   // ── Message rendering ─────────────────────────────────────────────────────
 
   function _appendUserMessage(text) {
@@ -427,7 +433,7 @@ const lincolnChat = (() => {
     el.innerHTML = `
       <div class="message-avatar lincoln-avatar">L</div>
       <div class="message-body">
-        <div class="message-bubble lincoln-bubble">${_esc(text)}</div>
+        <div class="message-bubble lincoln-bubble markdown-body">${text ? _md(text) : ''}</div>
         <div class="message-sources"></div>
       </div>
     `;
@@ -438,12 +444,8 @@ const lincolnChat = (() => {
   }
 
   function _renderFinalMessage(bubbleEl, text, sources, messageEl) {
-    let rendered = _esc(text);
-    rendered = rendered.replace(/`([^`]+)`/g, '<code>$1</code>');
-    rendered = rendered.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    rendered = rendered.replace(/\n/g, '<br>');
-    bubbleEl.innerHTML = rendered;
-
+    // Apply full markdown rendering when streaming completes
+    bubbleEl.innerHTML = _md(text);
     const sourcesEl = messageEl.querySelector('.message-sources');
     if (sourcesEl && sources?.length) _renderSources(sourcesEl, sources);
   }
@@ -483,20 +485,80 @@ const lincolnChat = (() => {
   function _clearMessages() {
     const container = document.getElementById('chatMessages');
     if (!container) return;
-    const projectName = _activeProject?.display_name || '';
-    const title    = projectName ? `${projectName}` : 'Lincoln is ready';
-    const subtitle = projectName
-      ? `New chat in <strong>${projectName}</strong>. Ask anything — your project files are available as context.`
-      : 'Select a project from the sidebar, then ask anything.';
-    container.innerHTML = `
-      <div class="lincoln-welcome" id="welcomeMessage">
-        <div class="welcome-logo">L</div>
-        <div class="welcome-text">
-          <div class="welcome-title">${title}</div>
-          <div class="welcome-subtitle">${subtitle}</div>
+
+    if (_activeProject) {
+      // Claude-style project home screen
+      container.innerHTML = `
+        <div class="lincoln-project-home" id="projectHome">
+          <div class="project-home-header">
+            <div class="project-home-logo">L</div>
+            <div class="project-home-title">${_escEl(_activeProject.display_name)}</div>
+            <div class="project-home-subtitle">What are we working on today?</div>
+          </div>
+          <button class="project-home-new-chat" onclick="lincolnChat.startNewChat()">
+            <i class="ti ti-plus" aria-hidden="true"></i>
+            New chat
+          </button>
+          <div class="project-home-recents" id="projectHomeRecents">
+            <div style="font-size:11px;color:var(--text-muted);padding:8px 0">Loading recent chats…</div>
+          </div>
         </div>
-      </div>
-    `;
+      `;
+      _loadProjectHomeRecents();
+    } else {
+      container.innerHTML = `
+        <div class="lincoln-welcome" id="welcomeMessage">
+          <div class="welcome-logo">L</div>
+          <div class="welcome-text">
+            <div class="welcome-title">Lincoln is ready</div>
+            <div class="welcome-subtitle">Select a project or start a general chat.</div>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  async function _loadProjectHomeRecents() {
+    const recentsEl = document.getElementById('projectHomeRecents');
+    if (!recentsEl || !_activeProjectId) return;
+    try {
+      const res      = await fetch('/api/history');
+      const sessions = await res.json();
+      const mine     = sessions.filter(s => s.project_id === _activeProjectId).slice(0, 8);
+      if (!mine.length) {
+        recentsEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">No chats yet — start one above.</div>';
+        return;
+      }
+      recentsEl.innerHTML = mine.map(s => `
+        <div class="project-home-chat-item" onclick="lincolnChat.loadSession(${s.id})">
+          <i class="ti ti-message-circle" style="font-size:14px;color:var(--text-muted);flex-shrink:0"></i>
+          <div class="project-home-chat-title">${_escEl(s.title)}</div>
+          <div class="project-home-chat-date">${_fmtDate(s.updated_at)}</div>
+        </div>
+      `).join('');
+    } catch (_) {
+      recentsEl.innerHTML = '';
+    }
+  }
+
+  function startNewChat() {
+    // Hide home screen, show empty chat, create session on first send
+    const home = document.getElementById('projectHome');
+    if (home) home.remove();
+    _sessionId = null;
+  }
+
+  function _fmtDate(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr), now = new Date();
+    if (now - d < 86400000) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+
+  function _escEl(str) {
+    const d = document.createElement('div');
+    d.textContent = str || '';
+    return d.innerHTML;
   }
 
   function _hideWelcome() {
@@ -534,6 +596,7 @@ const lincolnChat = (() => {
   return {
     init,
     newSession,
+    startNewChat,
     loadSession,
     setActiveProject,
     sendMessage,
