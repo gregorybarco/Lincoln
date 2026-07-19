@@ -702,6 +702,84 @@ a { color: var(--text-accent); }
 .input-model-pill:hover { border-color: var(--border-strong); color: var(--text-primary); }
 .input-model-pill i { font-size: 11px; }
 
+/* ── Think mode toggle button ─────────────────────────────────────────────── */
+.think-mode-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 0.5px solid var(--border);
+  background: var(--bg-page);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  white-space: nowrap;
+}
+.think-mode-btn:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.think-mode-btn.think-mode-deep {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* ── Thinking / reasoning block ───────────────────────────────────────────── */
+.think-block {
+  margin-bottom: 8px;
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-page);
+  overflow: hidden;
+}
+.think-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.think-summary::-webkit-details-marker { display: none; }
+.think-summary::before {
+  content: '▶';
+  font-size: 9px;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+details[open] .think-summary::before { transform: rotate(90deg); }
+.think-spinner {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--text-muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: think-spin 0.7s linear infinite;
+}
+@keyframes think-spin { to { transform: rotate(360deg); } }
+.think-token-count {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.think-body {
+  padding: 8px 14px 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  font-family: var(--font-mono, monospace);
+  border-top: 0.5px solid var(--border);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 .input-cmd-hints {
   margin-left: auto;
   display: flex;

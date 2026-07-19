@@ -25,7 +25,7 @@
         <button class="sidebar-section-action" onclick="lincolnHelp.open()" title="Help — what can Lincoln do?">
           <i class="ti ti-help" aria-hidden="true"></i>
         </button>
-        <span class="sidebar-version">v0.4.1</span>
+        <span class="sidebar-version">v0.5.0</span>
       </div>
     </div>
 
@@ -157,6 +157,10 @@
                   <span id="activeModelLabel">qwen3.5:9b</span>
                   <i class="ti ti-chevron-down" aria-hidden="true"></i>
                 </div>
+                <button class="think-mode-btn" id="thinkModeBtn"
+                        onclick="lincolnChat.cycleThinkMode()"
+                        title="Normal — balanced, no reasoning overhead"
+                        data-mode="normal">◎ Normal</button>
                 <div class="input-cmd-hints">
                   <button class="cmd-hint" onclick="lincolnChat.insertCommand('search ')">search …</button>
                   <button class="cmd-hint" onclick="lincolnChat.insertCommand('fetch ')">fetch url</button>
@@ -623,10 +627,33 @@
       });
     }
 
+    // ── show / hide — called by sidebar.js v0.5.0 ────────────────────────────
+    // show() restores canvas to its last width (if it was hidden by hide()).
+    // hide() collapses the canvas to 0 without toggling _collapsed state so
+    // the user's last manual width is preserved when they open a chat.
+    function show() {
+      const col = document.getElementById('canvasCol');
+      if (!col) return;
+      if (_collapsed) return;   // user deliberately collapsed — respect that
+      col.style.width      = _savedWidth + 'px';
+      col.style.minWidth   = '180px';
+      col.style.borderLeft = '0.5px solid var(--border)';
+    }
+
+    function hide() {
+      const col = document.getElementById('canvasCol');
+      if (!col) return;
+      // Save current width before hiding so show() can restore it
+      if (col.offsetWidth > 0) _savedWidth = col.offsetWidth;
+      col.style.width      = '0';
+      col.style.minWidth   = '0';
+      col.style.borderLeft = 'none';
+    }
+
     // Initialise after DOM ready
     document.addEventListener('DOMContentLoaded', _initDragResize);
 
-    return { toggle };
+    return { toggle, show, hide };
   })();
 
   // ── Help modal ────────────────────────────────────────────────────────────

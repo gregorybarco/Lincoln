@@ -1,21 +1,22 @@
 /**
- * Lincoln Canvas  v0.4.1
+ * Lincoln Canvas  v0.5.0
  * =======================
- * Changes from v0.4.0:
- *   - Diff tab: real inline diff against previous version of same block
- *   - Files tab: lists all saved canvas blocks with delete per block
- *   - Save button per code block: downloads file to disk
- *   - Delete button per code block: removes from canvas and sessionStorage
- *   - Session persistence: blocks survive page tab switches via sessionStorage
- *   - Canvas is populated on session restore via lincolnChat.loadSession()
+ * Changes from v0.4.1:
+ *   - Code blocks in canvas rendered with hljs syntax highlighting
+ *   - Canvas hides/shows handled by lincolnCanvasUI (in lincoln_index.html)
+ *     when project home is shown/hidden
+ *   - Tab switching: Code / Files / Diff
+ *   - Copy / save / delete actions per block
+ *   - Session persistence via sessionStorage
  */
 
 const lincolnCanvas = (() => {
 
-  let _activeTab  = 'code';
-  let _codeBlocks = [];    // { id, language, filename, content, projectName, sessionId, prev }
+  const _SK = 'lincoln_canvas_v2';
 
-  const _SK = 'lincoln_canvas_blocks';   // sessionStorage key
+  let _codeBlocks  = [];
+  let _activeTab   = 'code';
+  let _diffContent = null;
 
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -30,11 +31,10 @@ const lincolnCanvas = (() => {
 
   function switchTab(tab) {
     _activeTab = tab;
-    ['canvasTabCode', 'canvasTabFiles', 'canvasTabDiff'].forEach(id =>
-      document.getElementById(id)?.classList.remove('active')
-    );
-    const map = { code: 'canvasTabCode', files: 'canvasTabFiles', diff: 'canvasTabDiff' };
-    document.getElementById(map[tab])?.classList.add('active');
+    ['tabCode', 'tabFiles', 'tabDiff'].forEach(id => {
+      document.getElementById(id)?.classList.remove('active');
+    });
+    document.getElementById(`tab${tab.charAt(0).toUpperCase() + tab.slice(1)}`)?.classList.add('active');
     _renderActiveTab();
   }
 
@@ -45,31 +45,29 @@ const lincolnCanvas = (() => {
   }
 
 
-  // ── Add a code block ──────────────────────────────────────────────────────
+  // ── Pin a code block ──────────────────────────────────────────────────────
 
-  function pinCodeBlock({ language, filename, content, projectName, sessionId }) {
-    // If same filename already exists, keep previous version for diff
-    const existing = _codeBlocks.find(b => b.filename === filename);
-    const prev     = existing ? existing.content : null;
-    const id       = Date.now() + Math.random().toString(36).slice(2, 6);
+  function pinCodeBlock({ language, filename, content, projectName, sessionId, prev = null }) {
+    const existing = _codeBlocks.find(b => b.filename === filename && b.sessionId === sessionId);
 
     if (existing) {
       existing.prev     = existing.content;
       existing.content  = content;
       existing.language = language;
     } else {
+      const id = Date.now() + Math.random().toString(36).slice(2, 6);
       _codeBlocks.push({ id, language, filename, content, projectName, sessionId, prev });
     }
 
     _saveToSession();
-    _renderActiveTab();
+    if (_activeTab === 'code') _renderCode();
   }
 
 
   // ── Code tab ──────────────────────────────────────────────────────────────
 
   function _renderCode() {
-    const body  = document.getElementById('canvasBody');
+    const body = document.getElementById('canvasBody');
     if (!body) return;
 
     if (!_codeBlocks.length) {
@@ -82,34 +80,48 @@ const lincolnCanvas = (() => {
       return;
     }
 
-    body.innerHTML = `
-      <div class="canvas-code-blocks" style="display:flex;flex-direction:column">
-        ${_codeBlocks.map((block, idx) => `
-          <div class="canvas-file-ref">
-            <i class="ti ti-file-code"></i>
+    body.innerHTML = _codeBlocks.map((block, idx) => `
+      <div class="canvas-code-block">
+        <div class="canvas-code-header">
+          <span class="canvas-code-lang">
+            <i class="ti ti-file-code" style="font-size:11px;margin-right:4px"></i>
             ${_esc(block.filename || 'code')}
-            ${block.projectName ? ' · <span style="color:var(--text-muted)">' + _esc(block.projectName) + '</span>' : ''}
+            ${block.projectName ? `<span style="color:var(--text-muted)"> · ${_esc(block.projectName)}</span>` : ''}
+          </span>
+          <div class="canvas-code-actions">
+            <button class="canvas-code-action-btn" onclick="lincolnCanvas.copyBlock(${idx})" title="Copy">
+              <i class="ti ti-copy"></i>
+            </button>
+            <button class="canvas-code-action-btn" onclick="lincolnCanvas.saveBlock(${idx})" title="Download">
+              <i class="ti ti-download"></i>
+            </button>
+            <button class="canvas-code-action-btn" onclick="lincolnCanvas.deleteBlock(${idx})" title="Remove"
+                    style="color:var(--text-danger)">
+              <i class="ti ti-x"></i>
+            </button>
           </div>
-          <div class="canvas-code-block">
-            <div class="canvas-code-header">
-              <span class="canvas-code-lang">${_esc(block.language || 'text')}</span>
-              <div style="display:flex;gap:6px;align-items:center">
-                <button class="canvas-copy-btn" onclick="lincolnCanvas.copyBlock(${idx})" title="Copy">
-                  <i class="ti ti-copy"></i> copy
-                </button>
-                <button class="canvas-copy-btn" onclick="lincolnCanvas.saveBlock(${idx})" title="Save to disk">
-                  <i class="ti ti-download"></i> save
-                </button>
-                <button class="canvas-copy-btn" onclick="lincolnCanvas.deleteBlock(${idx})" title="Remove" style="color:var(--text-danger)">
-                  <i class="ti ti-trash"></i>
-                </button>
-              </div>
-            </div>
-            <pre id="codeBlock_${idx}">${_esc(block.content)}</pre>
-          </div>
-        `).join('')}
+        </div>
+        <div class="canvas-code-content">
+          <pre><code class="${_hlClass(block.language)}">${_highlighted(block.content, block.language)}</code></pre>
+        </div>
       </div>
-    `;
+    `).join('');
+  }
+
+  /** Returns highlighted HTML for a code block */
+  function _highlighted(code, lang) {
+    if (typeof hljs === 'undefined') return _esc(code);
+    if (lang && hljs.getLanguage(lang)) {
+      try { return hljs.highlight(code, { language: lang }).value; }
+      catch (_) {}
+    }
+    try { return hljs.highlightAuto(code).value; }
+    catch (_) { return _esc(code); }
+  }
+
+  function _hlClass(lang) {
+    if (!lang) return '';
+    return `language-${lang}`;
   }
 
 
@@ -120,45 +132,21 @@ const lincolnCanvas = (() => {
     if (!body) return;
 
     if (!_codeBlocks.length) {
-      body.innerHTML = `
-        <div class="canvas-empty-state">
-          <i class="ti ti-files"></i>
-          <div>No saved canvas blocks yet</div>
-        </div>
-      `;
+      body.innerHTML = '<div class="canvas-empty-state"><i class="ti ti-files"></i><div>No files yet</div></div>';
       return;
     }
 
     body.innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:6px;padding:4px 0">
+      <div style="display:flex;flex-direction:column;gap:4px;padding:4px 0">
         ${_codeBlocks.map((block, idx) => `
-          <div class="canvas-file-row">
-            <i class="ti ti-file-code" style="color:var(--accent-text);font-size:14px;flex-shrink:0"></i>
-            <div style="flex:1;min-width:0">
-              <div style="font-size:12px;font-weight:500;color:var(--text-primary);
-                          white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-                ${_esc(block.filename || 'code')}
-              </div>
-              <div style="font-size:10px;color:var(--text-muted)">
-                ${_esc(block.language)} · ${block.content.split('\n').length} lines
-                ${block.projectName ? ' · ' + _esc(block.projectName) : ''}
-              </div>
-            </div>
-            <div style="display:flex;gap:4px;flex-shrink:0">
-              <button class="canvas-copy-btn" onclick="lincolnCanvas.saveBlock(${idx})" title="Download">
-                <i class="ti ti-download"></i>
-              </button>
-              <button class="canvas-copy-btn" onclick="lincolnCanvas.deleteBlock(${idx})" title="Delete" style="color:var(--text-danger)">
-                <i class="ti ti-trash"></i>
-              </button>
-            </div>
+          <div class="canvas-file-ref" style="cursor:pointer" onclick="lincolnCanvas.switchTab('code')">
+            <i class="ti ti-file-code"></i>
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${_esc(block.filename || 'code')}
+            </span>
+            <span style="font-size:10px;color:var(--text-muted)">${_esc(block.language || '')}</span>
           </div>
         `).join('')}
-        <div style="margin-top:8px;padding-top:8px;border-top:0.5px solid var(--border)">
-          <button class="canvas-copy-btn" onclick="lincolnCanvas.clear()" style="color:var(--text-danger)">
-            <i class="ti ti-trash"></i> Clear all canvas blocks
-          </button>
-        </div>
       </div>
     `;
   }
@@ -170,88 +158,44 @@ const lincolnCanvas = (() => {
     const body = document.getElementById('canvasBody');
     if (!body) return;
 
-    const diffable = _codeBlocks.filter(b => b.prev !== null && b.prev !== undefined);
+    const blocksWithDiff = _codeBlocks.filter(b => b.prev !== null && b.prev !== undefined);
 
-    if (!diffable.length) {
-      body.innerHTML = `
-        <div class="canvas-empty-state">
-          <i class="ti ti-git-diff"></i>
-          <div>Diff appears when the same<br>file is generated twice</div>
-        </div>
-      `;
+    if (!blocksWithDiff.length) {
+      body.innerHTML = '<div class="canvas-empty-state"><i class="ti ti-git-diff"></i><div>No diffs yet</div></div>';
       return;
     }
 
-    body.innerHTML = diffable.map(block => `
-      <div class="canvas-file-ref">
-        <i class="ti ti-git-diff"></i>
-        ${_esc(block.filename)} — changes
-      </div>
-      <div class="canvas-diff-block">
-        ${_computeDiff(block.prev, block.content)}
-      </div>
-    `).join('');
-  }
+    body.innerHTML = blocksWithDiff.map(block => {
+      const prev    = (block.prev || '').split('\n');
+      const curr    = (block.content || '').split('\n');
+      const maxLen  = Math.max(prev.length, curr.length);
+      let diffLines = '';
 
-  function _computeDiff(oldText, newText) {
-    const oldLines = (oldText || '').split('\n');
-    const newLines = (newText || '').split('\n');
-
-    // Simple line-by-line diff (LCS-lite: enough for code review)
-    const result = [];
-    const maxLen = Math.max(oldLines.length, newLines.length);
-
-    // Build a basic edit script: removed lines (-), added lines (+), unchanged (=)
-    // Using a greedy approach: match lines in order
-    let oi = 0, ni = 0;
-    while (oi < oldLines.length || ni < newLines.length) {
-      const ol = oldLines[oi];
-      const nl = newLines[ni];
-
-      if (oi >= oldLines.length) {
-        result.push({ type: 'add',    line: nl });
-        ni++;
-      } else if (ni >= newLines.length) {
-        result.push({ type: 'remove', line: ol });
-        oi++;
-      } else if (ol === nl) {
-        result.push({ type: 'same',   line: ol });
-        oi++; ni++;
-      } else {
-        // Look ahead: check if old line appears soon in new (deletion), or vice versa (addition)
-        const newAhead  = newLines.slice(ni, ni + 4).indexOf(ol);
-        const oldAhead  = oldLines.slice(oi, oi + 4).indexOf(nl);
-
-        if (newAhead !== -1 && (oldAhead === -1 || newAhead <= oldAhead)) {
-          result.push({ type: 'add', line: nl });
-          ni++;
-        } else if (oldAhead !== -1) {
-          result.push({ type: 'remove', line: ol });
-          oi++;
+      for (let i = 0; i < maxLen; i++) {
+        const p = prev[i];
+        const c = curr[i];
+        if (p === undefined) {
+          diffLines += `<span class="diff-line diff-add">+ ${_esc(c)}</span>`;
+        } else if (c === undefined) {
+          diffLines += `<span class="diff-line diff-remove">- ${_esc(p)}</span>`;
+        } else if (p !== c) {
+          diffLines += `<span class="diff-line diff-remove">- ${_esc(p)}</span>`;
+          diffLines += `<span class="diff-line diff-add">+ ${_esc(c)}</span>`;
         } else {
-          result.push({ type: 'remove', line: ol });
-          result.push({ type: 'add',    line: nl });
-          oi++; ni++;
+          diffLines += `<span class="diff-line diff-same">  ${_esc(p)}</span>`;
         }
       }
-    }
 
-    const rendered = result.map(r => {
-      if (r.type === 'add')    return `<div class="diff-line diff-add">+ ${_esc(r.line)}</div>`;
-      if (r.type === 'remove') return `<div class="diff-line diff-remove">- ${_esc(r.line)}</div>`;
-      return `<div class="diff-line diff-same">  ${_esc(r.line)}</div>`;
+      return `
+        <div style="margin-bottom:12px">
+          <div class="canvas-file-ref" style="border-bottom:none;margin-bottom:4px">
+            <i class="ti ti-git-diff"></i>
+            ${_esc(block.filename || 'code')}
+          </div>
+          <div class="diff-viewer">${diffLines}</div>
+        </div>
+      `;
     }).join('');
-
-    const adds    = result.filter(r => r.type === 'add').length;
-    const removes = result.filter(r => r.type === 'remove').length;
-
-    return `
-      <div class="diff-summary">
-        <span class="diff-badge-add">+${adds}</span>
-        <span class="diff-badge-remove">−${removes}</span>
-      </div>
-      <pre class="diff-pre">${rendered}</pre>
-    `;
   }
 
 
@@ -262,14 +206,11 @@ const lincolnCanvas = (() => {
     if (!block) return;
     try {
       await navigator.clipboard.writeText(block.content);
-      const btns = document.querySelectorAll('.canvas-copy-btn');
-      // Find the copy button for this index (first button in the header of block idx)
-      const btn = document.querySelectorAll('.canvas-code-block .canvas-code-header')[idx]
-                    ?.querySelector('.canvas-copy-btn');
+      const btn = document.querySelectorAll('.canvas-code-action-btn')[idx * 3];
       if (btn) {
         const orig = btn.innerHTML;
-        btn.innerHTML = '<i class="ti ti-check"></i> copied';
-        setTimeout(() => { btn.innerHTML = orig; }, 1800);
+        btn.innerHTML = '<i class="ti ti-check"></i>';
+        setTimeout(() => { btn.innerHTML = orig; }, 1500);
       }
     } catch (err) {
       console.error('Copy failed:', err);
@@ -296,7 +237,8 @@ const lincolnCanvas = (() => {
   }
 
   function clear() {
-    _codeBlocks = [];
+    _codeBlocks  = [];
+    _diffContent = null;
     _saveToSession();
     _renderActiveTab();
   }
@@ -307,7 +249,7 @@ const lincolnCanvas = (() => {
   function _saveToSession() {
     try {
       sessionStorage.setItem(_SK, JSON.stringify(_codeBlocks));
-    } catch (_) { /* sessionStorage full — ignore */ }
+    } catch (_) {}
   }
 
   function _loadFromSession() {

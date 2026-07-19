@@ -1,14 +1,15 @@
 /**
- * Lincoln Chat  v0.4.1
+ * Lincoln Chat  v0.5.1
  * =====================
- * Changes from v0.4.0:
- *   - LAZY session creation: session is created on first send, not on init.
- *     This prevents ghost "New chat" entries in history on every page load.
- *   - File attach: wired to /api/files/upload via file browser or file input
- *   - Pending file shown as chip above send button, clearable
- *   - saveMemory(): uses active session summary via prompt, saves via POST
- *   - Canvas persistence: canvas cleared only on explicit newSession(),
- *     not on loadSession() (restores code blocks from message history)
+ * Changes from v0.4.1:
+ *   - Thinking mode toggle: Fast / Normal / Deep (like Claude's Low/Medium/Max/Thinking)
+ *     Fast   → think=false, immediate first token
+ *     Normal → think=false, default (same speed, labelled clearly)
+ *     Deep   → think=true, streams reasoning into collapsible block before answer
+ *   - Fix: <think> tokens no longer corrupt the response bubble.
+ *     THINK_START / THINK_END markers from backend route thinking tokens to a
+ *     separate collapsible <details> block — response text is always clean.
+ *   - think_mode sent with every /api/chat/send request
  */
 
 const lincolnChat = (() => {
@@ -20,6 +21,34 @@ const lincolnChat = (() => {
   let _pendingFileId   = null;   // file_id from /api/files/upload
   let _pendingFileName = null;
 
+  // ── Thinking mode ─────────────────────────────────────────────────────────
+  // Cycles: fast → normal → deep → fast
+  // fast/normal both suppress thinking (think=false); deep enables it (think=true).
+  const _THINK_MODES = ['fast', 'normal', 'deep'];
+  const _THINK_LABELS = {
+    fast:   { label: '⚡ Fast',   title: 'Fast — no reasoning, immediate response' },
+    normal: { label: '◎ Normal', title: 'Normal — balanced, no reasoning overhead' },
+    deep:   { label: '🧠 Deep',  title: 'Deep — full chain-of-thought reasoning (slower)' },
+  };
+  let _thinkMode = 'normal';   // default
+
+  function _cycleThinkMode() {
+    const idx   = _THINK_MODES.indexOf(_thinkMode);
+    _thinkMode  = _THINK_MODES[(idx + 1) % _THINK_MODES.length];
+    _updateThinkButton();
+  }
+
+  function _updateThinkButton() {
+    const btn = document.getElementById('thinkModeBtn');
+    if (!btn) return;
+    const meta     = _THINK_LABELS[_thinkMode];
+    btn.textContent = meta.label;
+    btn.title       = meta.title;
+    btn.dataset.mode = _thinkMode;
+    // Visual accent for deep mode
+    btn.classList.toggle('think-mode-deep', _thinkMode === 'deep');
+  }
+
 
   // ── Init ──────────────────────────────────────────────────────────────────
   // DO NOT create a session here — only load context strip.
@@ -27,6 +56,7 @@ const lincolnChat = (() => {
 
   async function init() {
     await _loadContextStrip();
+    _updateThinkButton();   // set initial label on the think toggle button
   }
 
 
@@ -127,14 +157,32 @@ const lincolnChat = (() => {
 
     _setStreaming(true);
 
-    const assistantEl = _appendAssistantMessage('', []);
-    const bubbleEl    = assistantEl.querySelector('.message-bubble');
-    const cursor      = document.createElement('span');
-    cursor.className  = 'streaming-cursor';
+    const assistantEl  = _appendAssistantMessage('', []);
+    const bubbleEl     = assistantEl.querySelector('.message-bubble');
+    const cursor       = document.createElement('span');
+    cursor.className   = 'streaming-cursor';
     bubbleEl.appendChild(cursor);
+
+    // Thinking block — created on demand when THINK_START arrives
+    let thinkEl        = null;   // <details> element
+    let thinkBodyEl    = null;   // <div> inside it receiving reasoning tokens
+    let inThinkBlock   = false;
+    let thinkText      = '';
 
     let fullText = '';
     let sources  = [];
+
+    function _ensureThinkBlock() {
+      if (thinkEl) return;
+      thinkEl = document.createElement('details');
+      thinkEl.className = 'think-block';
+      thinkEl.innerHTML = '<summary class="think-summary">Reasoning <span class="think-spinner"></span></summary>';
+      thinkBodyEl = document.createElement('div');
+      thinkBodyEl.className = 'think-body';
+      thinkEl.appendChild(thinkBodyEl);
+      // Insert before the bubble so it appears above the answer
+      bubbleEl.parentNode.insertBefore(thinkEl, bubbleEl);
+    }
 
     try {
       const response = await fetch('/api/chat/send', {
@@ -147,6 +195,7 @@ const lincolnChat = (() => {
           project_id:  _activeProjectId,
           use_rag:     !!_activeProjectId,
           file_id:     fileId || null,
+          think_mode:  _thinkMode,
         }),
       });
 
@@ -167,17 +216,47 @@ const lincolnChat = (() => {
           try {
             const event = JSON.parse(line.slice(6));
 
-            if (event.type === 'token') {
-              fullText += event.content;
-              bubbleEl.textContent = fullText;
-              bubbleEl.appendChild(cursor);
-              _scrollToBottom();
+            // ── think_mode handshake ──────────────────────────────────────
+            if (event.type === 'think_mode') {
+              // acknowledged — no UI action needed
             }
 
+            // ── token ─────────────────────────────────────────────────────
+            if (event.type === 'token') {
+              const content = event.content;
+
+              if (content === 'THINK_START') {
+                inThinkBlock = true;
+                _ensureThinkBlock();
+              } else if (content === 'THINK_END') {
+                inThinkBlock = false;
+                // Replace spinner with token count
+                if (thinkEl) {
+                  const words = thinkText.trim().split(/\s+/).length;
+                  thinkEl.querySelector('summary').innerHTML =
+                    `Reasoning <span class="think-token-count">${words} words</span>`;
+                }
+              } else if (inThinkBlock) {
+                thinkText += content;
+                if (thinkBodyEl) {
+                  thinkBodyEl.textContent = thinkText;
+                  _scrollToBottom();
+                }
+              } else {
+                // Normal response token — this is the text that shows in the bubble
+                fullText += content;
+                bubbleEl.textContent = fullText;
+                bubbleEl.appendChild(cursor);
+                _scrollToBottom();
+              }
+            }
+
+            // ── sources ───────────────────────────────────────────────────
             if (event.type === 'sources') {
               sources = event.sources || [];
             }
 
+            // ── done ──────────────────────────────────────────────────────
             if (event.type === 'done') {
               cursor.remove();
               _renderFinalMessage(bubbleEl, fullText, sources, assistantEl);
@@ -197,13 +276,14 @@ const lincolnChat = (() => {
               if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadHistory();
             }
 
+            // ── error ─────────────────────────────────────────────────────
             if (event.type === 'error') {
               cursor.remove();
               bubbleEl.textContent = `Error: ${event.message}`;
               bubbleEl.style.color = 'var(--text-danger)';
             }
 
-          } catch (_) { /* partial JSON */ }
+          } catch (_) { /* partial JSON — buffer fills on next iteration */ }
         }
       }
 
@@ -507,7 +587,7 @@ const lincolnChat = (() => {
       _loadProjectHomeRecents();
     } else {
       container.innerHTML = `
-        <div class="lincoln-welcome" id="welcomeMessage">
+        <div class="lincoln-welcome" id="lincolnWelcome">
           <div class="welcome-logo">L</div>
           <div class="welcome-text">
             <div class="welcome-title">Lincoln is ready</div>
@@ -562,7 +642,7 @@ const lincolnChat = (() => {
   }
 
   function _hideWelcome() {
-    document.getElementById('welcomeMessage')?.remove();
+    document.getElementById('lincolnWelcome')?.remove();
   }
 
   function _scrollToBottom() {
@@ -591,6 +671,23 @@ const lincolnChat = (() => {
   }
 
 
+  // ── Public screen-state methods (called by lincolnSidebar) ───────────────
+  // These MUST stay in sync with what lincoln_sidebar.js calls on lincolnChat.
+
+  function showWelcome() {
+    // Called by sidebar when user selects "General" (no project)
+    _sessionId = null;
+    _clearMessages();   // renders lincolnWelcome screen
+  }
+
+  function showProjectHome(project) {
+    // Called by sidebar when user selects a project
+    _sessionId      = null;
+    _activeProject  = project;
+    _clearMessages();   // renders project home screen
+  }
+
+
   // ── Public API ────────────────────────────────────────────────────────────
 
   return {
@@ -607,6 +704,9 @@ const lincolnChat = (() => {
     clearPendingFile,
     dismissContextStrip,
     saveMemory,
+    cycleThinkMode,
+    showWelcome,
+    showProjectHome,
   };
 
 })();

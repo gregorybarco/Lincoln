@@ -1,24 +1,36 @@
 """
-Lincoln File Routes
-===================
+Lincoln File Routes  v0.5.0
+============================
 Flask routes for file attachment handling in the chat UI.
 
 Endpoints:
-  POST /api/files/upload   Accept a file upload and store it for session use
+  POST /api/files/upload   Accept a file upload, extract text, store for session use
+  GET  /api/files/<id>     Retrieve stored file content by file_id
 
-Files are stored temporarily in data/uploads/ keyed by session_id.
-They are injected into the chat context as text when the next message is sent.
-Binary files (images, PDFs) are not yet supported — text/code files only.
+v0.5.0 additions:
+  - PDF text extraction via pypdf (already in requirements.txt)
+  - .docx text extraction via python-docx (add: pip install python-docx)
+  - .xlsx text extraction via openpyxl (add: pip install openpyxl)
+  - .ipynb (Jupyter) — JSON parse, extract code cells
+  - .tex .latex .bib .maple .mw .mpl added to allowlist as plain text
+  - Size cap raised to 2 MB for document types (.pdf .docx .xlsx)
+  - Text files still capped at 512 KB
 
-Supported extensions: .py .f90 .f95 .f03 .f08 .js .ts .css .html .sql
-                      .md .txt .csv .json .yaml .yml .toml .ini .cfg .env
-                      .c .cpp .h .hpp .rs .go .java .sh .bat .ps1
+Supported extensions (v0.5.0):
+  Code:        .py .f90 .f95 .f03 .f08 .f .for .js .ts .jsx .tsx
+               .css .html .htm .sql .c .cpp .h .hpp .rs .go .java
+               .sh .bat .ps1 .r
+  Data/Config: .md .txt .csv .json .yaml .yml .toml .ini .cfg .env.example
+  LaTeX/Math:  .tex .latex .bib .maple .mw .mpl
+  Notebook:    .ipynb
+  Documents:   .pdf .docx .xlsx  (server-side text extraction)
 
-Rejected extensions return 415 Unsupported Media Type with a clear message.
-File size limit: 512 KB per file. Larger files return 413.
+Binary files that slipped through extension check → 415 Unsupported.
 """
 
 import hashlib
+import io
+import json
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
@@ -27,20 +39,116 @@ from lincoln.lincoln_configuration import DB_PATH
 
 files_blueprint = Blueprint("files", __name__)
 
-# Where uploaded files land — sibling of chroma_db\ and lincoln_database.db
 _UPLOAD_DIR = DB_PATH.parent / "uploads"
 
-_MAX_BYTES = 512 * 1024  # 512 KB
+_MAX_TEXT_BYTES = 512 * 1024   # 512 KB for plain text / code
+_MAX_DOC_BYTES  = 2 * 1024 * 1024  # 2 MB for PDF / docx / xlsx
 
-_ALLOWED_EXTENSIONS = {
-    ".py", ".f90", ".f95", ".f03", ".f08", ".for", ".fpp",
+# ── Extension lists ───────────────────────────────────────────────────────────
+
+_TEXT_EXTENSIONS = {
+    # Code
+    ".py", ".f90", ".f95", ".f03", ".f08", ".f", ".for", ".fpp",
     ".js", ".ts", ".jsx", ".tsx", ".css", ".html", ".htm",
-    ".sql", ".md", ".txt", ".csv", ".json",
-    ".yaml", ".yml", ".toml", ".ini", ".cfg",
-    ".c", ".cpp", ".h", ".hpp", ".rs", ".go", ".java",
-    ".sh", ".bat", ".ps1", ".env.example",
+    ".sql", ".c", ".cpp", ".h", ".hpp", ".rs", ".go", ".java",
+    ".sh", ".bat", ".ps1", ".r",
+    # Data / config
+    ".md", ".txt", ".csv", ".json", ".yaml", ".yml", ".toml",
+    ".ini", ".cfg", ".env.example",
+    # LaTeX / math / Maple
+    ".tex", ".latex", ".bib", ".maple", ".mw", ".mpl",
 }
 
+_DOC_EXTENSIONS = {
+    ".pdf",   # text extracted via pypdf
+    ".docx",  # text extracted via python-docx
+    ".xlsx",  # text extracted via openpyxl
+    ".ipynb", # JSON parsed, code cells extracted
+}
+
+_ALLOWED_EXTENSIONS = _TEXT_EXTENSIONS | _DOC_EXTENSIONS
+
+
+# ── Text extractors for binary document types ─────────────────────────────────
+
+def _extract_pdf(raw: bytes) -> str:
+    """Extract text from PDF using pypdf (already in requirements.txt)."""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(raw))
+        pages  = []
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(f"--- Page {i + 1} ---\n{text.strip()}")
+        return "\n\n".join(pages) if pages else "(No extractable text found in PDF)"
+    except Exception as exc:
+        return f"(PDF text extraction failed: {exc})"
+
+
+def _extract_docx(raw: bytes) -> str:
+    """Extract text from .docx using python-docx."""
+    try:
+        import docx
+        doc        = docx.Document(io.BytesIO(raw))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        # Also extract tables
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                if cells:
+                    paragraphs.append(" | ".join(cells))
+        return "\n\n".join(paragraphs) if paragraphs else "(No text found in document)"
+    except ImportError:
+        return "(python-docx not installed — run: pip install python-docx)"
+    except Exception as exc:
+        return f"(DOCX text extraction failed: {exc})"
+
+
+def _extract_xlsx(raw: bytes) -> str:
+    """Extract text from .xlsx using openpyxl."""
+    try:
+        import openpyxl
+        wb     = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        sheets = []
+        for name in wb.sheetnames:
+            ws   = wb[name]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                cells = [str(c) for c in row if c is not None]
+                if cells:
+                    rows.append("\t".join(cells))
+            if rows:
+                sheets.append(f"=== Sheet: {name} ===\n" + "\n".join(rows))
+        return "\n\n".join(sheets) if sheets else "(No data found in spreadsheet)"
+    except ImportError:
+        return "(openpyxl not installed — run: pip install openpyxl)"
+    except Exception as exc:
+        return f"(XLSX text extraction failed: {exc})"
+
+
+def _extract_ipynb(raw: bytes) -> str:
+    """Extract code and markdown cells from Jupyter notebook."""
+    try:
+        nb    = json.loads(raw.decode("utf-8"))
+        cells = nb.get("cells", [])
+        parts = []
+        for cell in cells:
+            ctype  = cell.get("cell_type", "")
+            source = "".join(cell.get("source", []))
+            if not source.strip():
+                continue
+            if ctype == "code":
+                lang = nb.get("metadata", {}).get("kernelspec", {}).get("language", "python")
+                parts.append(f"```{lang}\n{source}\n```")
+            elif ctype == "markdown":
+                parts.append(source)
+        return "\n\n".join(parts) if parts else "(Empty notebook)"
+    except Exception as exc:
+        return f"(Notebook extraction failed: {exc})"
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @files_blueprint.route("/api/files/upload", methods=["POST"])
 def upload_file():
@@ -54,14 +162,11 @@ def upload_file():
     Response on success (200):
       {
         "status":     "ok",
-        "file_id":    "<sha256-hex[:12]>",
-        "filename":   "original_name.py",
-        "size_bytes": 4096,
-        "preview":    "first 300 chars of file content"
+        "file_id":    "<sha256-hex[:16]>",
+        "filename":   "original_name.pdf",
+        "size_bytes": 204800,
+        "preview":    "first 500 chars of extracted text"
       }
-
-    The file_id is passed back with the next chat message so the route
-    handler can inject the file content into the Ollama prompt.
     """
     _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -69,53 +174,74 @@ def upload_file():
         return jsonify({"status": "error", "message": "No file part in request"}), 400
 
     upload = request.files["file"]
-
     if not upload.filename:
         return jsonify({"status": "error", "message": "Empty filename"}), 400
 
     suffix = Path(upload.filename).suffix.lower()
+
+    # Special handling for .env.example — suffix would be '' or '.example'
+    if upload.filename.endswith(".env.example"):
+        suffix = ".env.example"
+
     if suffix not in _ALLOWED_EXTENSIONS:
         return jsonify({
             "status":  "error",
             "message": (
                 f"File type '{suffix}' is not supported. "
-                f"Upload a text or code file (.py, .f90, .md, .txt, .json, …)"
+                f"Supported: .py .f90 .tex .maple .md .csv .pdf .docx .xlsx .ipynb and more."
             ),
         }), 415
 
-    raw = upload.read()
+    is_doc = suffix in _DOC_EXTENSIONS
+    limit  = _MAX_DOC_BYTES if is_doc else _MAX_TEXT_BYTES
+    raw    = upload.read()
 
-    if len(raw) > _MAX_BYTES:
+    if len(raw) > limit:
+        kb = len(raw) // 1024
         return jsonify({
             "status":  "error",
             "message": (
-                f"File is {len(raw) // 1024} KB — limit is 512 KB. "
+                f"File is {kb} KB — limit is {limit // 1024} KB. "
                 f"Paste the relevant section directly into the chat instead."
             ),
         }), 413
 
-    # Decode — reject binary files that slipped through extension check
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return jsonify({
-            "status":  "error",
-            "message": "File does not appear to be UTF-8 text. Binary files are not supported.",
-        }), 415
+    # Extract text content
+    if suffix == ".pdf":
+        text = _extract_pdf(raw)
+    elif suffix == ".docx":
+        text = _extract_docx(raw)
+    elif suffix == ".xlsx":
+        text = _extract_xlsx(raw)
+    elif suffix == ".ipynb":
+        text = _extract_ipynb(raw)
+    else:
+        # Plain text / code
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            # Try latin-1 as fallback (common for Fortran source)
+            try:
+                text = raw.decode("latin-1")
+            except Exception:
+                return jsonify({
+                    "status":  "error",
+                    "message": "File does not appear to be text. Binary files are not supported.",
+                }), 415
 
-    # Content-addressed storage: same file content → same file_id
+    # Content-addressed storage
     file_id  = hashlib.sha256(raw).hexdigest()[:16]
-    out_path = _UPLOAD_DIR / f"{file_id}{suffix}"
+    out_path = _UPLOAD_DIR / f"{file_id}.txt"
 
     if not out_path.exists():
-        out_path.write_bytes(raw)
+        out_path.write_text(text, encoding="utf-8")
 
     return jsonify({
         "status":     "ok",
         "file_id":    file_id,
         "filename":   upload.filename,
         "size_bytes": len(raw),
-        "preview":    text[:300].strip(),
+        "preview":    text[:500].strip(),
     }), 200
 
 
@@ -126,12 +252,21 @@ def get_file_content(file_id: str):
     Called by lincoln_routes_chat.py before building the Ollama payload.
 
     Response:
-      { "status": "ok", "content": "<full file text>", "filename": "…" }
+      { "status": "ok", "content": "<full extracted text>", "filename": "…" }
     """
-    # Sanitise the file_id — must be hex only
     if not all(c in "0123456789abcdef" for c in file_id):
         return jsonify({"status": "error", "message": "Invalid file_id"}), 400
 
+    # v0.5.0: all extracted content stored as .txt
+    txt_path = _UPLOAD_DIR / f"{file_id}.txt"
+    if txt_path.exists():
+        try:
+            content = txt_path.read_text(encoding="utf-8")
+            return jsonify({"status": "ok", "content": content, "filename": txt_path.name}), 200
+        except Exception as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 500
+
+    # Legacy: try any extension (v0.4.x uploads)
     matches = list(_UPLOAD_DIR.glob(f"{file_id}.*"))
     if not matches:
         return jsonify({"status": "error", "message": "File not found"}), 404
@@ -142,8 +277,4 @@ def get_file_content(file_id: str):
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 500
 
-    return jsonify({
-        "status":   "ok",
-        "content":  content,
-        "filename": file_path.name,
-    }), 200
+    return jsonify({"status": "ok", "content": content, "filename": file_path.name}), 200

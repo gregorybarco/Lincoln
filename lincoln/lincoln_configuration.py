@@ -129,6 +129,14 @@ UI_HOST = "127.0.0.1"
 UI_PORT = _optional_int("LINCOLN_UI_PORT", 5000)
 
 
+# ── VRAM cap for context window sizing ───────────────────────────────────────
+# Used by lincoln_ollama_service.get_safe_num_ctx() to cap num_ctx per model.
+# Default 16 matches the RTX 5060 Ti 16GB. Change in .env if hardware changes.
+# Never expose this in the UI — it is a hardware fact, not a user preference.
+
+OLLAMA_VRAM_GB = float(os.getenv("LINCOLN_VRAM_GB", "16"))
+
+
 # ── MLflow (stubbed — wired in the MLflow session) ───────────────────────────
 # Keys are present and commented out in .env.
 # These values will be empty strings until MLflow is configured.
@@ -154,6 +162,7 @@ def print_startup_summary():
     print(f"  LLM model   : {LLM_MODEL}  (default · overridable in UI)")
     print(f"  Embed model : {EMBED_MODEL}  (fixed)")
     print(f"  Chunk size  : {CHUNK_SIZE}")
+    print(f"  VRAM cap    : {OLLAMA_VRAM_GB} GB  (ctx window sizing)")
     print(f"  UI          : http://{UI_HOST}:{UI_PORT}")
     print(f"  Database    : {DB_PATH}")
     print(f"  ChromaDB    : {CHROMA_DB_PATH}")

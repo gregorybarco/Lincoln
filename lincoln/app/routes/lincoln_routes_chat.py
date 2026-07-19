@@ -86,6 +86,9 @@ def send_message():
     project_id = data.get("project_id")
     use_rag    = data.get("use_rag", True)
     file_id    = data.get("file_id")          # may be None
+    # think_mode: "fast"|"normal"|"deep"  — fast/normal suppress thinking, deep enables it
+    think_mode = data.get("think_mode", "normal")
+    think      = (think_mode == "deep")
 
     if not session_id or not user_text:
         return jsonify({"error": "session_id and message are required"}), 400
@@ -123,6 +126,8 @@ def send_message():
         sources      = []
         rag_context  = ""
         project_name = ""
+        # Tell the UI which mode is active so it can handle THINK_START/END correctly
+        yield f"data: {json.dumps({'type': 'think_mode', 'mode': think_mode})}\n\n"
 
         if project_id and use_rag:
             try:
@@ -155,7 +160,7 @@ def send_message():
 
         full_response = []
         try:
-            for token in stream_chat(messages=ollama_messages, model=model):
+            for token in stream_chat(messages=ollama_messages, model=model, think=think):
                 full_response.append(token)
                 yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
         except Exception as stream_error:
