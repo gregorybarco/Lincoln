@@ -32,7 +32,7 @@ const lincolnChat = (() => {
   };
   let _thinkMode = 'normal';   // default
 
-  function _cycleThinkMode() {
+  function cycleThinkMode() {
     const idx   = _THINK_MODES.indexOf(_thinkMode);
     _thinkMode  = _THINK_MODES[(idx + 1) % _THINK_MODES.length];
     _updateThinkButton();

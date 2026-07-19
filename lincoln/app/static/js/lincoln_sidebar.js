@@ -525,6 +525,7 @@ const lincolnSidebar = (() => {
         errorEl.style.display = 'block';
         return;
       }
+        
       closeProjectSettings();
       await loadProjects();
     } catch (err) {
@@ -675,6 +676,30 @@ const lincolnSidebar = (() => {
     el.style.display = 'block';
   }
 
+  async function launchAider() {
+    if (!_activeProjectId) {
+      alert("Please select a project first.");
+      return;
+    }
+    
+    try {
+      const res = await fetch(`/api/projects/${_activeProjectId}/aider`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      const data = await res.json();
+      if (!res.ok) {
+        alert(`Failed to launch Aider: ${data.error || 'Unknown error'}`);
+      } else {
+        console.log("Aider launched successfully in terminal.");
+      }
+    } catch (err) {
+      console.error('Aider launch error:', err);
+      alert(`Error launching Aider: ${err.message}`);
+    }
+  }
+
 
   // ── Public API ────────────────────────────────────────────────────────────
 
@@ -701,6 +726,7 @@ const lincolnSidebar = (() => {
     clearAllHistory,
     deleteSession,
     _openHistorySession,
+    launchAider,
     get activeProjectId() { return _activeProjectId; },
     get activeProject()   { return _activeProject; },
   };

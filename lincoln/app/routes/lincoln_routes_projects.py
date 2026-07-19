@@ -10,12 +10,16 @@ Endpoints:
   POST   /api/projects/<id>/index   Trigger an index build for a project
   GET    /api/projects/<id>/status  Get index status for a project
   POST   /api/projects/<id>/preview Preview which files would be indexed
+  POST   /api/projects/<id>/aider   Launch Aider in a new terminal
 
 These routes are the only way projects are created or deleted in Lincoln.
 No project configuration ever goes through .env.
 """
 
 import threading
+import subprocess
+import os
+from pathlib import Path
 from flask import Blueprint, jsonify, request
 
 from lincoln.lincoln_database import (
@@ -97,7 +101,6 @@ def update_project(project_id: int):
     Returns:
       JSON with the updated project dict
     """
-    from pathlib import Path
     project = get_project_by_id(project_id)
     if not project:
         return jsonify({"error": f"Project {project_id} not found"}), 404
@@ -241,3 +244,30 @@ def get_index_status(project_id: int):
         "vectors": project.get("vector_count", 0),
     })
     return jsonify(status)
+
+
+@projects_blueprint.route("/api/projects/<int:project_id>/aider", methods=["POST"])
+def launch_aider_terminal(project_id: int):
+    """
+    Launch Aider in a new terminal window for the given project.
+    """
+    project = get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": f"Project {project_id} not found"}), 404
+
+    code_path = project.get("code_path") or project.get("path") or "."
+    if code_path != "." and not Path(code_path).exists():
+        return jsonify({"error": f"Code path does not exist: {code_path}"}), 400
+
+    try:
+        cwd = str(Path(code_path).resolve()) if code_path != "." else os.getcwd()
+        
+        # Using start cmd /k to open a new terminal window on Windows
+        subprocess.Popen(
+            ["start", "cmd", "/k", "aider"],
+            shell=True,
+            cwd=cwd
+        )
+        return jsonify({"status": "launched", "message": "Aider launched in terminal."})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
