@@ -38,11 +38,17 @@ CREATE TABLE IF NOT EXISTS lincoln_projects (
     name          TEXT UNIQUE NOT NULL,
     display_name  TEXT NOT NULL,
     path          TEXT NOT NULL,
+    code_path     TEXT,
+    write_enabled INTEGER DEFAULT 0,
     collection    TEXT UNIQUE NOT NULL,
     vector_count  INTEGER DEFAULT 0,
     last_indexed  TEXT,
     created_at    TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Migration: add code_path and write_enabled to existing databases
+-- SQLite ignores these if the columns already exist
+CREATE TABLE IF NOT EXISTS _lincoln_migration_v1 (done INTEGER);
 
 CREATE TABLE IF NOT EXISTS lincoln_settings (
     key   TEXT PRIMARY KEY,
@@ -110,12 +116,27 @@ def initialise_database():
     """
     with _get_connection() as connection:
         connection.executescript(_SCHEMA)
+
+        # Migrate existing databases — add columns if they don't exist yet
+        # SQLite doesn't support IF NOT EXISTS on ALTER TABLE, so we catch the error
+        for col_sql in [
+            "ALTER TABLE lincoln_projects ADD COLUMN code_path TEXT",
+            "ALTER TABLE lincoln_projects ADD COLUMN write_enabled INTEGER DEFAULT 0",
+        ]:
+            try:
+                connection.execute(col_sql)
+            except Exception:
+                pass  # Column already exists — safe to ignore
+
         for key, value in _DEFAULT_SETTINGS.items():
             connection.execute(
                 "INSERT OR IGNORE INTO lincoln_settings (key, value) VALUES (?, ?)",
                 (key, value),
             )
         connection.commit()
+
+    # Clean up ghost sessions from previous startup bugs — runs every startup, safe
+    delete_all_empty_sessions()
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -174,13 +195,16 @@ def get_project_by_name(name: str) -> dict | None:
     return dict(row) if row else None
 
 
-def create_project(display_name: str, path: str) -> dict:
+def create_project(display_name: str, path: str, code_path: str | None = None) -> dict:
     """
     Create a new project record in the database.
 
     Args:
         display_name : Human-readable label shown in the UI (e.g. 'Options Pricing')
-        path         : Absolute path to the project folder on disk
+        path         : Absolute path to the source folder to index into RAG
+        code_path    : Optional path to the code folder for Aider to read.
+                       Defaults to None (Aider uses path if not set).
+                       write_enabled is always False — Aider never auto-writes.
 
     Returns:
         The newly created project as a dict.
@@ -195,10 +219,17 @@ def create_project(display_name: str, path: str) -> dict:
     if not name or name == "_":
         raise ValueError("Project display name cannot be empty or contain only symbols.")
 
-    if not Path(path).exists():
+    # path is optional for conversation-only projects — '.' is the sentinel value
+    if path and path != '.' and not Path(path).exists():
         raise ValueError(
             f"Project path does not exist on disk: {path}\n"
             f"Create the folder first, then add it as a project."
+        )
+
+    if code_path and not Path(code_path).exists():
+        raise ValueError(
+            f"Code path does not exist on disk: {code_path}\n"
+            f"Create the folder first or leave it blank."
         )
 
     with _get_connection() as connection:
@@ -215,10 +246,10 @@ def create_project(display_name: str, path: str) -> dict:
         connection.execute(
             """
             INSERT INTO lincoln_projects
-                (name, display_name, path, collection, created_at)
-            VALUES (?, ?, ?, ?, ?)
+                (name, display_name, path, code_path, write_enabled, collection, created_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
             """,
-            (name, display_name, path, collection, _now()),
+            (name, display_name, path, code_path or None, collection, _now()),
         )
         connection.commit()
 
@@ -243,6 +274,47 @@ def update_project_vector_count(project_id: int, vector_count: int):
             WHERE id = ?
             """,
             (vector_count, _now(), project_id),
+        )
+        connection.commit()
+
+
+def update_project_settings(
+    project_id:    int,
+    path:          str | None = None,
+    code_path:     str | None = None,
+    write_enabled: bool | None = None,
+):
+    """
+    Update a project's folder path, code path, and write_enabled flag.
+    Only fields explicitly passed are updated — None means leave unchanged.
+
+    Args:
+        project_id    : DB row ID of the project
+        path          : New RAG source folder path (None = no change)
+        code_path     : New Aider code folder path (None = no change)
+        write_enabled : True/False for Aider write access (None = no change)
+    """
+    fields = []
+    values = []
+
+    if path is not None:
+        fields.append("path = ?")
+        values.append(path)
+    if code_path is not None:
+        fields.append("code_path = ?")
+        values.append(code_path if code_path else None)
+    if write_enabled is not None:
+        fields.append("write_enabled = ?")
+        values.append(1 if write_enabled else 0)
+
+    if not fields:
+        return
+
+    values.append(project_id)
+    with _get_connection() as connection:
+        connection.execute(
+            f"UPDATE lincoln_projects SET {', '.join(fields)} WHERE id = ?",
+            values,
         )
         connection.commit()
 
@@ -324,6 +396,7 @@ def save_settings(updates: dict):
 def get_all_sessions(limit: int = 50) -> list[dict]:
     """
     Return recent chat sessions, newest first.
+    Excludes ghost sessions — 'New chat' with no messages (created by old startup bug).
     Includes the project display name for sidebar rendering.
     """
     with _get_connection() as connection:
@@ -334,12 +407,41 @@ def get_all_sessions(limit: int = 50) -> list[dict]:
                 p.display_name AS project_display_name
             FROM lincoln_chat_sessions s
             LEFT JOIN lincoln_projects p ON s.project_id = p.id
+            WHERE NOT (
+                s.title = 'New chat'
+                AND NOT EXISTS (
+                    SELECT 1 FROM lincoln_chat_messages m WHERE m.session_id = s.id
+                )
+            )
             ORDER BY s.updated_at DESC
             LIMIT ?
             """,
             (limit,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def delete_all_empty_sessions():
+    """Delete all ghost 'New chat' sessions that have no messages. One-time cleanup."""
+    with _get_connection() as connection:
+        connection.execute(
+            """
+            DELETE FROM lincoln_chat_sessions
+            WHERE title = 'New chat'
+            AND NOT EXISTS (
+                SELECT 1 FROM lincoln_chat_messages m WHERE m.session_id = lincoln_chat_sessions.id
+            )
+            """
+        )
+        connection.commit()
+
+
+def delete_all_sessions():
+    """Delete all chat sessions and messages. Used by bulk clear history."""
+    with _get_connection() as connection:
+        connection.execute("DELETE FROM lincoln_chat_messages")
+        connection.execute("DELETE FROM lincoln_chat_sessions")
+        connection.commit()
 
 
 def create_session(

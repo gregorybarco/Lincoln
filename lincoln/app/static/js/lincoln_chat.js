@@ -42,6 +42,8 @@ const lincolnChat = (() => {
       });
       const session = await res.json();
       _sessionId    = session.id;
+      // Refresh history immediately so the new chat appears in the sidebar
+      if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadHistory();
     } catch (err) {
       console.error('Failed to create session:', err);
     }
@@ -71,8 +73,10 @@ const lincolnChat = (() => {
       const messages = await res.json();
       _sessionId     = sessionId;
       _clearMessages();
+      _hideWelcome();
       _clearPendingFile();
-      // Don't clear canvas here — restore code blocks from messages below
+      // Clear canvas then restore only THIS session's code blocks
+      if (typeof lincolnCanvas !== 'undefined') lincolnCanvas.clear();
 
       messages.forEach(msg => {
         if (msg.role === 'user') {

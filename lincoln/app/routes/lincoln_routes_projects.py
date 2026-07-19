@@ -23,6 +23,7 @@ from lincoln.lincoln_database import (
     delete_project,
     get_all_projects,
     get_project_by_id,
+    update_project_settings,
     update_project_vector_count,
 )
 from lincoln.lincoln_rag_index_service import (
@@ -69,6 +70,7 @@ def add_project():
     data         = request.get_json() or {}
     display_name = data.get("display_name", "").strip()
     path         = data.get("path", "").strip()
+    code_path    = (data.get("code_path") or "").strip() or None
 
     if not display_name:
         return jsonify({"error": "display_name is required"}), 400
@@ -76,10 +78,54 @@ def add_project():
         return jsonify({"error": "path is required"}), 400
 
     try:
-        project = create_project(display_name=display_name, path=path)
+        project = create_project(display_name=display_name, path=path, code_path=code_path)
         return jsonify(project), 201
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+
+
+@projects_blueprint.route("/api/projects/<int:project_id>", methods=["PATCH"])
+def update_project(project_id: int):
+    """
+    Update a project's folder paths and write_enabled flag.
+
+    Request JSON (all fields optional — only send what changed):
+      path          : str  — RAG source folder path
+      code_path     : str  — Aider code folder path ('' to clear)
+      write_enabled : bool — whether Aider can write to code_path
+
+    Returns:
+      JSON with the updated project dict
+    """
+    from pathlib import Path
+    project = get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": f"Project {project_id} not found"}), 404
+
+    data          = request.get_json() or {}
+    path          = data.get("path")
+    code_path     = data.get("code_path")        # may be empty string to clear
+    write_enabled = data.get("write_enabled")    # bool or None
+
+    # Validate paths exist if provided and non-empty
+    if path and path != '.':
+        if not Path(path).exists():
+            return jsonify({"error": f"Path does not exist: {path}"}), 400
+    if code_path and code_path.strip():
+        if not Path(code_path).exists():
+            return jsonify({"error": f"Code path does not exist: {code_path}"}), 400
+
+    try:
+        update_project_settings(
+            project_id    = project_id,
+            path          = path if path is not None else None,
+            code_path     = code_path if code_path is not None else None,
+            write_enabled = write_enabled if write_enabled is not None else None,
+        )
+        updated = get_project_by_id(project_id)
+        return jsonify(updated)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @projects_blueprint.route("/api/projects/<int:project_id>", methods=["DELETE"])

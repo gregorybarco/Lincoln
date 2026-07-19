@@ -95,6 +95,10 @@
         <button class="topbar-icon-btn" onclick="lincolnHelp.open()" title="Help">
           <i class="ti ti-help" aria-hidden="true"></i>
         </button>
+        <button class="topbar-icon-btn" id="topbarCanvasBtn"
+                onclick="lincolnCanvasUI.toggle()" title="Toggle canvas">
+          <i class="ti ti-layout-sidebar-right" aria-hidden="true"></i>
+        </button>
         <button class="topbar-icon-btn" onclick="lincolnChat.newSession()" title="New chat">
           <i class="ti ti-edit" aria-hidden="true"></i>
         </button>
@@ -241,34 +245,130 @@
       </button>
     </div>
     <div class="panel-body">
+
       <div class="form-field">
         <label class="form-label" for="newProjectName">Project name</label>
         <input type="text" id="newProjectName" class="form-input" placeholder="Options Pricing">
-        <div class="form-hint">Used as the display name in the sidebar.</div>
+        <div class="form-hint">A named space for siloed chats — like a Claude Project.</div>
       </div>
+
       <div class="form-field">
-        <label class="form-label" for="newProjectPath">Project folder path</label>
-        <div style="display:flex;gap:6px">
-          <input type="text" id="newProjectPath" class="form-input" style="flex:1"
-                 placeholder="B:\OptionsPricing">
-          <button class="panel-btn-primary" style="white-space:nowrap;flex-shrink:0"
-                  onclick="lincolnSidebar.openFileBrowser('folder', path => { document.getElementById('newProjectPath').value = path; })"
-                  title="Browse for folder">
-            <i class="ti ti-folder-open" aria-hidden="true"></i> Browse
-          </button>
-        </div>
-        <div class="form-hint">Absolute path to the project folder on disk.</div>
+        <label class="form-label" for="newProjectDesc">Description
+          <span style="color:var(--text-muted);font-weight:400"> — optional</span>
+        </label>
+        <textarea id="newProjectDesc" class="form-input" rows="2"
+                  placeholder="What is this project about? Lincoln will use this as context."
+                  style="resize:vertical;min-height:56px"></textarea>
       </div>
-      <div class="form-preview" id="newProjectPreview" style="display:none"></div>
-      <div class="form-error"   id="newProjectError"   style="display:none"></div>
+
+      <div style="padding:10px 12px;background:var(--bg-page);border:0.5px solid var(--border);border-radius:var(--radius-md);font-size:11.5px;color:var(--text-muted)">
+        <strong style="color:var(--text-secondary)">Optional: add a code folder</strong><br>
+        Once created, open the project to attach a code folder for RAG indexing and Aider access.
+        Write access is always off by default.
+      </div>
+
+      <div class="form-error" id="newProjectError" style="display:none"></div>
     </div>
     <div class="panel-footer">
       <button class="panel-btn-secondary" onclick="lincolnSidebar.closeNewProjectPanel()">Cancel</button>
-      <button class="panel-btn-primary"   onclick="lincolnSidebar.previewProject()">Preview files</button>
-      <button class="panel-btn-confirm"   id="createProjectBtn"
-              onclick="lincolnSidebar.createProject()" style="display:none">
-        Create and index
+      <button class="panel-btn-confirm" onclick="lincolnSidebar.createProject()">
+        Create project
       </button>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<!-- ── PROJECT SETTINGS PANEL ───────────────────────────────────────────── -->
+<div class="lincoln-overlay" id="projectSettingsOverlay" style="display:none">
+  <div class="lincoln-panel" id="projectSettingsPanel" style="width:480px">
+    <div class="panel-header">
+      <div class="panel-title">
+        <i class="ti ti-folder-cog" style="margin-right:6px;font-size:15px"></i>
+        <span id="projectSettingsTitle">Project settings</span>
+      </div>
+      <button class="panel-close" onclick="lincolnSidebar.closeProjectSettings()">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="panel-body">
+
+      <!-- Index status -->
+      <div id="projectIndexStatus" style="padding:10px 12px;background:var(--bg-page);border:0.5px solid var(--border);border-radius:var(--radius-md);font-size:12px;color:var(--text-secondary)">
+        Loading…
+      </div>
+
+      <!-- RAG source folder -->
+      <div class="form-field">
+        <label class="form-label" for="projSettingsPath">
+          RAG source folder
+          <span style="color:var(--text-muted);font-weight:400"> — files indexed for retrieval</span>
+        </label>
+        <div style="display:flex;gap:6px">
+          <input type="text" id="projSettingsPath" class="form-input"
+                 style="flex:1;font-family:var(--font-mono);font-size:12px"
+                 placeholder="e.g. B:\OptionsPricing">
+          <button class="panel-btn-primary" style="white-space:nowrap;flex-shrink:0"
+                  onclick="_nativeFolderPick('projSettingsPath')" title="Browse">
+            <i class="ti ti-folder-open" aria-hidden="true"></i> Browse
+          </button>
+        </div>
+        <div class="form-hint">Lincoln will index .py, .f90, .md files from this folder into ChromaDB.</div>
+      </div>
+
+      <!-- Code folder for Aider -->
+      <div class="form-field">
+        <label class="form-label" for="projSettingsCodePath">
+          Aider code folder
+          <span style="color:var(--text-muted);font-weight:400"> — optional, for file editing</span>
+        </label>
+        <div style="display:flex;gap:6px">
+          <input type="text" id="projSettingsCodePath" class="form-input"
+                 style="flex:1;font-family:var(--font-mono);font-size:12px"
+                 placeholder="Leave blank to use same as RAG folder">
+          <button class="panel-btn-primary" style="white-space:nowrap;flex-shrink:0"
+                  onclick="_nativeFolderPick('projSettingsCodePath')" title="Browse">
+            <i class="ti ti-folder-open" aria-hidden="true"></i> Browse
+          </button>
+        </div>
+      </div>
+
+      <!-- Write enabled toggle -->
+      <div style="padding:12px 14px;background:var(--bg-page);border:0.5px solid var(--border);border-radius:var(--radius-md)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div>
+            <div style="font-size:13px;font-weight:500;color:var(--text-primary)">Aider write access</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px">
+              Allow Aider to modify files in the code folder. Off = read-only.
+            </div>
+          </div>
+          <button id="writeToggleBtn" onclick="lincolnSidebar.toggleWriteAccess()"
+                  style="padding:4px 14px;border-radius:20px;font-size:12px;font-weight:500;border:0.5px solid var(--border);background:var(--bg-surface);color:var(--text-secondary);white-space:nowrap">
+            Off — read only
+          </button>
+        </div>
+        <div style="font-size:11px;color:var(--text-danger);margin-top:8px;font-weight:500">
+          ⚠ Write access allows Aider to modify your files. Always review changes before approving.
+          Options Pricing should never have write access enabled.
+        </div>
+      </div>
+
+      <div class="form-error" id="projectSettingsError" style="display:none"></div>
+    </div>
+    <div class="panel-footer" style="justify-content:space-between">
+      <button class="panel-btn-secondary" style="color:var(--text-danger)"
+              onclick="lincolnSidebar.deleteActiveProject()">
+        <i class="ti ti-trash" aria-hidden="true"></i> Delete project
+      </button>
+      <div style="display:flex;gap:8px">
+        <button class="panel-btn-secondary" onclick="lincolnSidebar.closeProjectSettings()">Cancel</button>
+        <button class="panel-btn-primary" onclick="lincolnSidebar.saveProjectSettings()">Save</button>
+        <button class="panel-btn-confirm" id="projectIndexBtn"
+                onclick="lincolnSidebar.indexActiveProject()">
+          <i class="ti ti-refresh" aria-hidden="true"></i> Index now
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -418,27 +518,113 @@
 <script src="{{ url_for('static', filename='js/lincoln_settings.js') }}"></script>
 <script src="{{ url_for('static', filename='js/lincoln_chat.js') }}"></script>
 <script>
-  // ── Canvas collapse toggle ────────────────────────────────────────────────
+  // ── Native Windows folder picker ─────────────────────────────────────────
+  // Opens the OS-native file dialog. On Windows/Chrome this is the real
+  // Windows Explorer folder picker — no fake modal needed.
+  function _nativeFolderPick(targetInputId) {
+    const picker = document.createElement('input');
+    picker.type  = 'file';
+    picker.setAttribute('webkitdirectory', '');
+    picker.setAttribute('directory', '');
+    picker.style.display = 'none';
+    document.body.appendChild(picker);
+    picker.addEventListener('change', () => {
+      if (picker.files && picker.files.length > 0) {
+        // webkitRelativePath = 'FolderName/file.ext'
+        // We want the folder name hint — user can edit the full path manually
+        const rel    = picker.files[0].webkitRelativePath || '';
+        const folder = rel.split('/')[0] || '';
+        const input  = document.getElementById(targetInputId);
+        if (input && folder) {
+          // Show folder name as hint — user pastes full absolute path
+          input.placeholder = folder + ' (paste full path: e.g. B:\\' + folder + ')';
+          input.focus();
+        }
+      }
+      document.body.removeChild(picker);
+    });
+    picker.click();
+  }
+
+  // ── Canvas collapse + drag resize ────────────────────────────────────────
   const lincolnCanvasUI = (() => {
-    let _collapsed = false;
+    let _collapsed    = false;
+    let _savedWidth   = 320;   // remembers last width across toggles
+
     function toggle() {
       _collapsed = !_collapsed;
-      const col = document.getElementById('canvasCol');
-      const btn = document.getElementById('canvasCollapseBtn');
+      const col        = document.getElementById('canvasCol');
+      const collapseBtn = document.getElementById('canvasCollapseBtn');
+      const topbarBtn  = document.getElementById('topbarCanvasBtn');
+
       if (_collapsed) {
-        col.style.width    = '0';
-        col.style.minWidth = '0';
-        col.style.overflow = 'hidden';
+        _savedWidth          = col.offsetWidth || _savedWidth;
+        col.style.width      = '0';
+        col.style.minWidth   = '0';
         col.style.borderLeft = 'none';
-        if (btn) btn.title = 'Expand canvas';
+        if (collapseBtn) collapseBtn.title = 'Expand canvas';
+        if (topbarBtn)   topbarBtn.style.color = 'var(--text-muted)';
       } else {
-        col.style.width    = 'var(--canvas-width)';
-        col.style.minWidth = 'var(--canvas-width)';
-        col.style.overflow = 'hidden';
+        col.style.width      = _savedWidth + 'px';
+        col.style.minWidth   = '200px';
         col.style.borderLeft = '0.5px solid var(--border)';
-        if (btn) btn.title = 'Collapse canvas';
+        if (collapseBtn) collapseBtn.title = 'Collapse canvas';
+        if (topbarBtn)   topbarBtn.style.color = 'var(--accent-text)';
       }
     }
+
+    // ── Drag-to-resize handle ─────────────────────────────────────────────
+    // A thin invisible strip on the LEFT edge of the canvas column.
+    // Mousedown on it starts a drag that resizes the canvas.
+    function _initDragResize() {
+      const col = document.getElementById('canvasCol');
+      if (!col) return;
+
+      const handle = document.createElement('div');
+      handle.id    = 'canvasResizeHandle';
+      handle.style.cssText = [
+        'position:absolute', 'top:0', 'left:0', 'width:5px', 'height:100%',
+        'cursor:col-resize', 'z-index:50', 'background:transparent',
+      ].join(';');
+
+      // Make canvas-col position:relative so handle is anchored to it
+      col.style.position = 'relative';
+      col.insertBefore(handle, col.firstChild);
+
+      let _startX   = 0;
+      let _startW   = 0;
+      let _dragging = false;
+
+      handle.addEventListener('mousedown', e => {
+        if (_collapsed) return;
+        _dragging = true;
+        _startX   = e.clientX;
+        _startW   = col.offsetWidth;
+        document.body.style.cursor      = 'col-resize';
+        document.body.style.userSelect  = 'none';
+        e.preventDefault();
+      });
+
+      document.addEventListener('mousemove', e => {
+        if (!_dragging) return;
+        const delta   = _startX - e.clientX;   // dragging left = wider
+        const newWidth = Math.max(180, Math.min(700, _startW + delta));
+        col.style.width    = newWidth + 'px';
+        col.style.minWidth = '180px';
+        _savedWidth = newWidth;
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (!_dragging) return;
+        _dragging = false;
+        document.body.style.cursor     = '';
+        document.body.style.userSelect = '';
+      });
+    }
+
+    // Initialise after DOM ready
+    document.addEventListener('DOMContentLoaded', _initDragResize);
+
     return { toggle };
   })();
 

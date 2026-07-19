@@ -55,10 +55,14 @@ const lincolnSidebar = (() => {
         <div class="project-info">
           <div class="project-name">${_esc(p.display_name)}</div>
           <div class="project-meta">
-            ${p.vector_count ? p.vector_count.toLocaleString() + ' vectors' : 'Not indexed'}
+            ${p.vector_count ? p.vector_count.toLocaleString() + ' vectors' : 'No index'}
             · ${_date(p.last_indexed || p.created_at)}
           </div>
         </div>
+        <button class="project-settings-btn" title="Project settings"
+                onclick="event.stopPropagation();lincolnSidebar.openProjectSettings(${p.id}, ${JSON.stringify(p).replace(/"/g, '&quot;')})">
+          <i class="ti ti-settings" aria-hidden="true"></i>
+        </button>
       </div>
     `).join('');
   }
@@ -86,6 +90,9 @@ const lincolnSidebar = (() => {
     if (aiderLabel) aiderLabel.textContent = project.display_name || project.name;
 
     if (typeof lincolnChat !== 'undefined') lincolnChat.setActiveProject(projectId, project);
+
+    // Canvas is siloed per project — clear when switching
+    if (typeof lincolnCanvas !== 'undefined') lincolnCanvas.clear();
   }
 
 
@@ -94,11 +101,10 @@ const lincolnSidebar = (() => {
   function openNewProjectPanel() {
     const overlay = document.getElementById('newProjectOverlay');
     if (overlay) overlay.style.display = 'flex';
-    document.getElementById('newProjectPreview').style.display  = 'none';
-    document.getElementById('newProjectError').style.display    = 'none';
-    document.getElementById('createProjectBtn').style.display   = 'none';
+    document.getElementById('newProjectError').style.display = 'none';
     document.getElementById('newProjectName').value = '';
-    document.getElementById('newProjectPath').value = '';
+    const desc = document.getElementById('newProjectDesc');
+    if (desc) desc.value = '';
     document.getElementById('newProjectName').focus();
   }
 
@@ -107,86 +113,39 @@ const lincolnSidebar = (() => {
     if (overlay) overlay.style.display = 'none';
   }
 
-  async function previewProject() {
-    const name    = document.getElementById('newProjectName').value.trim();
-    const path    = document.getElementById('newProjectPath').value.trim();
-    const errorEl = document.getElementById('newProjectError');
-    const prevEl  = document.getElementById('newProjectPreview');
+  // previewProject kept for compatibility but not used in simplified panel
+  async function previewProject() {}
 
-    if (!name || !path) {
-      _showError(errorEl, 'Project name and folder path are both required.');
+  async function createProject() {
+    const name    = document.getElementById('newProjectName')?.value.trim();
+    const desc    = document.getElementById('newProjectDesc')?.value.trim() || '';
+    const errorEl = document.getElementById('newProjectError');
+
+    if (!name) {
+      _showError(errorEl, 'Project name is required.');
       return;
     }
 
-    errorEl.style.display = 'none';
-    prevEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px">Scanning files…</div>';
-    prevEl.style.display = 'block';
-
     try {
-      const createRes = await fetch('/api/projects', {
-        method: 'POST',
+      // Create project with no path — it's a conversation silo, path is optional
+      const res     = await fetch('/api/projects', {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ display_name: name, path }),
+        body:    JSON.stringify({ display_name: name, path: '.', description: desc }),
       });
-      const project = await createRes.json();
+      const project = await res.json();
 
-      if (!createRes.ok) {
+      if (!res.ok) {
         _showError(errorEl, project.error || 'Could not create project.');
-        prevEl.style.display = 'none';
         return;
       }
 
-      const previewRes = await fetch(`/api/projects/${project.id}/preview`, { method: 'POST' });
-      const preview    = await previewRes.json();
-
-      if (preview.error) {
-        _showError(errorEl, preview.error);
-        await fetch(`/api/projects/${project.id}`, { method: 'DELETE' });
-        prevEl.style.display = 'none';
-        return;
-      }
-
-      const byLang = Object.entries(preview.by_language || {})
-        .map(([lang, count]) => `${count} ${lang}`).join(', ');
-
-      prevEl.innerHTML = `
-        <strong>${preview.total} files found</strong> — ${byLang || 'no files'}<br>
-        <span style="color:var(--text-muted);font-size:11px">
-          Ready to index. Click 'Create and index' to embed.
-        </span>
-      `;
-      document.getElementById('createProjectBtn').dataset.projectId = project.id;
-      document.getElementById('createProjectBtn').style.display     = 'inline-flex';
+      closeNewProjectPanel();
+      await loadProjects();
+      selectProject(project.id, project);
 
     } catch (err) {
       _showError(errorEl, `Error: ${err.message}`);
-      prevEl.style.display = 'none';
-    }
-  }
-
-  async function createProject() {
-    const projectId = document.getElementById('createProjectBtn').dataset.projectId;
-    if (!projectId) return;
-
-    closeNewProjectPanel();
-    _showToast('Indexing project…');
-
-    try {
-      const res  = await fetch(`/api/projects/${projectId}/index`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ force_rebuild: false }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        _hideToast();
-        alert(`Index error: ${data.error}`);
-        return;
-      }
-      _pollIndexStatus(parseInt(projectId));
-    } catch (err) {
-      _hideToast();
-      console.error('Index error:', err);
     }
   }
 
@@ -214,157 +173,193 @@ const lincolnSidebar = (() => {
   }
 
 
-  // ── File browser modal ────────────────────────────────────────────────────
-  // Used by both "Pick folder" in New Project and "Attach file" in chat input.
+  // ── Project settings panel ────────────────────────────────────────────────
 
-  let _fileBrowserMode   = 'folder';   // 'folder' | 'file'
-  let _fileBrowserTarget = null;       // callback(selectedPath)
+  let _settingsProjectId   = null;
+  let _settingsWriteEnabled = false;
+
+  function openProjectSettings(projectId, project) {
+    _settingsProjectId    = projectId;
+    _settingsWriteEnabled = !!(project.write_enabled);
+
+    document.getElementById('projectSettingsTitle').textContent = project.display_name;
+    document.getElementById('projSettingsPath').value     = (project.path && project.path !== '.') ? project.path : '';
+    document.getElementById('projSettingsCodePath').value = project.code_path || '';
+    document.getElementById('projectSettingsError').style.display = 'none';
+
+    _updateWriteToggle(_settingsWriteEnabled);
+
+    // Show index status
+    const statusEl = document.getElementById('projectIndexStatus');
+    if (project.vector_count) {
+      statusEl.innerHTML = `
+        <strong>${project.vector_count.toLocaleString()} vectors indexed</strong>
+        · Last indexed ${_date(project.last_indexed)}
+        <span style="color:var(--text-muted);font-size:11px;display:block;margin-top:2px">
+          Click "Index now" to rebuild after code changes.
+        </span>`;
+    } else {
+      statusEl.innerHTML = `
+        <strong style="color:var(--text-muted)">Not indexed yet</strong>
+        <span style="color:var(--text-muted);font-size:11px;display:block;margin-top:2px">
+          Add a RAG source folder and click "Index now".
+        </span>`;
+    }
+
+    document.getElementById('projectSettingsOverlay').style.display = 'flex';
+  }
+
+  function closeProjectSettings() {
+    document.getElementById('projectSettingsOverlay').style.display = 'none';
+    _settingsProjectId = null;
+  }
+
+  function toggleWriteAccess() {
+    _settingsWriteEnabled = !_settingsWriteEnabled;
+    _updateWriteToggle(_settingsWriteEnabled);
+  }
+
+  function _updateWriteToggle(enabled) {
+    const btn = document.getElementById('writeToggleBtn');
+    if (!btn) return;
+    if (enabled) {
+      btn.textContent  = 'On — write enabled';
+      btn.style.background = 'var(--danger-bg)';
+      btn.style.color      = 'var(--text-danger)';
+      btn.style.borderColor = 'var(--text-danger)';
+    } else {
+      btn.textContent  = 'Off — read only';
+      btn.style.background  = 'var(--bg-surface)';
+      btn.style.color       = 'var(--text-secondary)';
+      btn.style.borderColor = 'var(--border)';
+    }
+  }
+
+  async function saveProjectSettings() {
+    if (!_settingsProjectId) return;
+    const path      = document.getElementById('projSettingsPath').value.trim();
+    const codePath  = document.getElementById('projSettingsCodePath').value.trim();
+    const errorEl   = document.getElementById('projectSettingsError');
+    errorEl.style.display = 'none';
+
+    try {
+      const res = await fetch(`/api/projects/${_settingsProjectId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          path:          path  || '.',
+          code_path:     codePath || '',
+          write_enabled: _settingsWriteEnabled,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errorEl.textContent   = data.error || 'Could not save settings.';
+        errorEl.style.display = 'block';
+        return;
+      }
+      closeProjectSettings();
+      await loadProjects();
+    } catch (err) {
+      errorEl.textContent   = `Error: ${err.message}`;
+      errorEl.style.display = 'block';
+    }
+  }
+
+  async function indexActiveProject() {
+    if (!_settingsProjectId) return;
+
+    // Save settings first so path is set before indexing
+    await saveProjectSettings();
+
+    _showToast('Indexing project…');
+    try {
+      const res  = await fetch(`/api/projects/${_settingsProjectId}/index`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ force_rebuild: false }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        _hideToast();
+        alert(`Index error: ${data.error}`);
+        return;
+      }
+      _pollIndexStatus(_settingsProjectId);
+    } catch (err) {
+      _hideToast();
+      console.error('Index error:', err);
+    }
+  }
+
+  async function deleteActiveProject() {
+    if (!_settingsProjectId) return;
+    const name = document.getElementById('projectSettingsTitle').textContent;
+    if (!confirm(`Delete project "${name}"? All chats in this project will also be deleted. This cannot be undone.`)) return;
+
+    try {
+      await fetch(`/api/projects/${_settingsProjectId}?wipe_index=false`, { method: 'DELETE' });
+      closeProjectSettings();
+      await loadProjects();
+    } catch (err) {
+      console.error('Delete project error:', err);
+    }
+  }
+
+
+  // ── Native file/folder picker ─────────────────────────────────────────────
+  // Uses the browser's built-in OS file dialog — no fake browser modal.
+  // On Windows this opens the native Windows Explorer picker.
+
+  let _fileBrowserMode   = 'folder';
+  let _fileBrowserTarget = null;
 
   function openFileBrowser(mode, callback) {
     _fileBrowserMode   = mode || 'folder';
     _fileBrowserTarget = callback;
 
-    let modal = document.getElementById('fileBrowserModal');
-    if (!modal) {
-      modal = _createFileBrowserModal();
-      document.body.appendChild(modal);
+    const input = document.createElement('input');
+    input.type  = 'file';
+
+    if (mode === 'folder') {
+      // Opens native folder picker on Windows/Chrome
+      input.setAttribute('webkitdirectory', '');
+      input.setAttribute('directory', '');
+    } else {
+      // Opens native file picker
+      input.accept = '.py,.f90,.f95,.f03,.f,.for,.js,.ts,.css,.html,.sql,.md,.txt,.json,.yaml,.toml,.c,.cpp,.h,.sh,.bat';
     }
-    modal.style.display = 'flex';
-    _browsePath('');
-  }
 
-  function _createFileBrowserModal() {
-    const modal = document.createElement('div');
-    modal.id        = 'fileBrowserModal';
-    modal.className = 'lincoln-overlay';
-    modal.innerHTML = `
-      <div class="lincoln-panel" style="width:520px;max-height:70vh">
-        <div class="panel-header">
-          <div class="panel-title" id="fbTitle">Browse files</div>
-          <button class="panel-close" onclick="lincolnSidebar.closeFileBrowser()">
-            <i class="ti ti-x"></i>
-          </button>
-        </div>
-        <div style="padding:8px 14px;border-bottom:0.5px solid var(--border);display:flex;gap:6px;align-items:center">
-          <input id="fbPathInput" class="form-input" style="flex:1;font-size:12px;font-family:var(--font-mono)"
-                 placeholder="Type a path…"
-                 onkeydown="if(event.key==='Enter') lincolnSidebar._browsePath(this.value)">
-          <button class="panel-btn-primary" onclick="lincolnSidebar._browsePath(document.getElementById('fbPathInput').value)">
-            Go
-          </button>
-        </div>
-        <div id="fbList" style="flex:1;overflow-y:auto;padding:8px 6px;min-height:200px">
-          <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px">Loading…</div>
-        </div>
-        <div class="panel-footer" style="justify-content:space-between;align-items:center">
-          <span id="fbSelected" style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
-          <div style="display:flex;gap:8px">
-            <button class="panel-btn-secondary" onclick="lincolnSidebar.closeFileBrowser()">Cancel</button>
-            <button class="panel-btn-confirm" id="fbConfirm" onclick="lincolnSidebar._confirmBrowser()" disabled>
-              Select
-            </button>
-          </div>
-        </div>
-      </div>
-    `;
-    return modal;
-  }
+    input.style.display = 'none';
+    document.body.appendChild(input);
 
-  let _fbCurrentPath = '';
-
-  async function _browsePath(path) {
-    _fbCurrentPath = path;
-    const input = document.getElementById('fbPathInput');
-    if (input) input.value = path;
-
-    const list = document.getElementById('fbList');
-    if (!list) return;
-    list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px">Loading…</div>';
-
-    try {
-      const res  = await fetch(`/api/files/browse?path=${encodeURIComponent(path)}`);
-      const data = await res.json();
-
-      if (data.error) {
-        list.innerHTML = `<div style="padding:12px;color:var(--text-danger);font-size:12px">${_esc(data.error)}</div>`;
-        return;
-      }
-
-      let html = '';
-
-      // Up button
-      if (data.parent !== null) {
-        html += `
-          <div class="fb-entry fb-dir" onclick="lincolnSidebar._browsePath(${JSON.stringify(data.parent)})">
-            <i class="ti ti-arrow-up"></i>
-            <span>..</span>
-          </div>
-        `;
-      }
-
-      // Entries
-      data.entries.forEach(entry => {
-        const isDir  = entry.type === 'dir';
-        const isFile = entry.type === 'file';
-        const selectable = (_fileBrowserMode === 'folder' && isDir) ||
-                           (_fileBrowserMode === 'file'   && isFile);
-
-        if (isDir) {
-          html += `
-            <div class="fb-entry fb-dir" onclick="lincolnSidebar._browsePath(${JSON.stringify(entry.path)})">
-              <i class="ti ti-folder-filled" style="color:#f59e0b"></i>
-              <span>${_esc(entry.name)}</span>
-              ${selectable ? `<button class="fb-select-btn" onclick="event.stopPropagation();lincolnSidebar._selectBrowserEntry(${JSON.stringify(entry.path)})">Select</button>` : ''}
-            </div>
-          `;
-        } else if (isFile && _fileBrowserMode === 'file') {
-          html += `
-            <div class="fb-entry fb-file" onclick="lincolnSidebar._selectBrowserEntry(${JSON.stringify(entry.path)})">
-              <i class="ti ti-file-code" style="color:var(--text-muted)"></i>
-              <span>${_esc(entry.name)}</span>
-            </div>
-          `;
+    input.addEventListener('change', () => {
+      let selectedPath = '';
+      if (input.files && input.files.length > 0) {
+        if (mode === 'folder') {
+          // webkitRelativePath gives 'foldername/file.ext' — extract just the folder name
+          // For a real absolute path, user types it manually in the path input
+          // We surface the folder name as a hint
+          const rel = input.files[0].webkitRelativePath;
+          selectedPath = rel.split('/')[0];
         } else {
-          html += `
-            <div class="fb-entry fb-file fb-disabled">
-              <i class="ti ti-file" style="color:var(--border-strong)"></i>
-              <span style="color:var(--text-muted)">${_esc(entry.name)}</span>
-            </div>
-          `;
+          selectedPath = input.files[0].name;
         }
-      });
-
-      if (!data.entries.length && data.parent === null) {
-        html = '<div style="padding:12px;color:var(--text-muted);font-size:12px">No items found.</div>';
       }
+      document.body.removeChild(input);
+      if (selectedPath && _fileBrowserTarget) {
+        _fileBrowserTarget(selectedPath);
+      }
+    });
 
-      list.innerHTML = html;
-
-    } catch (err) {
-      list.innerHTML = `<div style="padding:12px;color:var(--text-danger);font-size:12px">Error: ${_esc(err.message)}</div>`;
-    }
+    input.click();
   }
 
-  function _selectBrowserEntry(path) {
-    const selected = document.getElementById('fbSelected');
-    const confirm  = document.getElementById('fbConfirm');
-    if (selected) selected.textContent = path;
-    if (confirm)  confirm.disabled = false;
-    _fbCurrentPath = path;
-  }
-
-  function _confirmBrowser() {
-    const path = document.getElementById('fbSelected')?.textContent;
-    if (path && _fileBrowserTarget) {
-      _fileBrowserTarget(path);
-    }
-    closeFileBrowser();
-  }
-
-  function closeFileBrowser() {
-    const modal = document.getElementById('fileBrowserModal');
-    if (modal) modal.style.display = 'none';
-  }
+  // Stubs for public API compatibility — no-ops since we use native picker now
+  function closeFileBrowser() {}
+  function _browsePath() {}
+  function _selectBrowserEntry() {}
+  function _confirmBrowser() {}
 
 
   // ── Chat history ──────────────────────────────────────────────────────────
@@ -383,15 +378,24 @@ const lincolnSidebar = (() => {
     const list = document.getElementById('historyList');
     if (!list) return;
 
-    // Filter out brand-new "New chat" sessions with no messages yet
-    const realSessions = sessions.filter(s => s.title !== 'New chat' || s.updated_at !== s.created_at);
-
-    if (!realSessions.length) {
+    if (!sessions.length) {
       list.innerHTML = '<div class="sidebar-empty-state">No history yet.</div>';
       return;
     }
 
-    list.innerHTML = realSessions.map(s => `
+    // Bulk clear button appears when there is history
+    const header = document.querySelector('.sidebar-history .sidebar-section-label');
+    if (header && !document.getElementById('clearAllHistoryBtn')) {
+      const clearBtn = document.createElement('button');
+      clearBtn.id        = 'clearAllHistoryBtn';
+      clearBtn.className = 'sidebar-section-action';
+      clearBtn.title     = 'Clear all history';
+      clearBtn.innerHTML = '<i class="ti ti-trash" style="color:var(--text-danger)"></i>';
+      clearBtn.onclick   = () => lincolnSidebar.clearAllHistory();
+      header.appendChild(clearBtn);
+    }
+
+    list.innerHTML = sessions.map(s => `
       <div class="sidebar-history-item" id="historyItem_${s.id}"
            onclick="lincolnSidebar._openHistorySession(${s.id})">
         <div class="history-title">${_esc(s.title)}</div>
@@ -405,9 +409,20 @@ const lincolnSidebar = (() => {
   }
 
   function _openHistorySession(sessionId) {
-    // Always switch to Chat mode first, then load session
-    switchMode('chat');
-    if (typeof lincolnChat !== 'undefined') lincolnChat.loadSession(sessionId);
+  switchMode('chat');
+  setTimeout(() => lincolnChat.loadSession(sessionId), 0);
+}
+
+  async function clearAllHistory() {
+    if (!confirm('Delete all chat history? This cannot be undone.')) return;
+    try {
+      await fetch('/api/history/all', { method: 'DELETE' });
+      document.getElementById('historyList').innerHTML =
+        '<div class="sidebar-empty-state">No history yet.</div>';
+      document.getElementById('clearAllHistoryBtn')?.remove();
+    } catch (err) {
+      console.error('Clear all history error:', err);
+    }
   }
 
   async function deleteSession(sessionId) {
@@ -496,11 +511,18 @@ const lincolnSidebar = (() => {
     loadProjects,
     loadHistory,
     selectProject,
+    openProjectSettings,
+    closeProjectSettings,
+    toggleWriteAccess,
+    saveProjectSettings,
+    indexActiveProject,
+    deleteActiveProject,
     openNewProjectPanel,
     closeNewProjectPanel,
     previewProject,
     createProject,
     deleteSession,
+    clearAllHistory,
     switchMode,
     launchAider,
     openFileBrowser,
@@ -508,6 +530,7 @@ const lincolnSidebar = (() => {
     _browsePath,
     _selectBrowserEntry,
     _confirmBrowser,
+    _openHistorySession,
     get activeProjectId() { return _activeProjectId; },
   };
 

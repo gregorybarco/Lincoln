@@ -242,6 +242,19 @@ a { color: var(--text-accent); }
 .project-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-meta { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
 
+.project-settings-btn {
+  opacity: 0;
+  width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+  flex-shrink: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.sidebar-project-item:hover .project-settings-btn { opacity: 1; }
+.project-settings-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
 .sidebar-history-item {
   display: flex;
   align-items: center;
