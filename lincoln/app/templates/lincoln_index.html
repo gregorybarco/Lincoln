@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lincoln</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/lincoln_main.css') }}">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+</head>
+<body>
+
+<!-- ── APP SHELL ──────────────────────────────────────────────────────────── -->
+<div class="lincoln-shell" id="lincolnShell">
+
+  <!-- ── SIDEBAR ──────────────────────────────────────────────────────────── -->
+  <aside class="lincoln-sidebar" id="lincolnSidebar">
+
+    <div class="sidebar-logo">
+      <div class="sidebar-logo-left">
+        <span class="sidebar-status-dot" id="ollamaStatusDot"></span>
+        <span class="sidebar-logo-name">Lincoln</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button class="sidebar-section-action" onclick="lincolnHelp.open()" title="Help — what can Lincoln do?">
+          <i class="ti ti-help" aria-hidden="true"></i>
+        </button>
+        <span class="sidebar-version">v0.4.1</span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="sidebar-section-label">Mode</div>
+      <button class="sidebar-nav-item active" id="navChat" onclick="lincolnSidebar.switchMode('chat')">
+        <i class="ti ti-message-circle" aria-hidden="true"></i>
+        Chat
+      </button>
+      <button class="sidebar-nav-item" id="navAider" onclick="lincolnSidebar.switchMode('aider')">
+        <i class="ti ti-terminal-2" aria-hidden="true"></i>
+        Edit files (Aider)
+      </button>
+      <button class="sidebar-nav-item" id="navMemory" onclick="lincolnSidebar.switchMode('memory')">
+        <i class="ti ti-brain" aria-hidden="true"></i>
+        Memory
+      </button>
+    </nav>
+
+    <div class="sidebar-projects">
+      <div class="sidebar-section-label">
+        Projects
+        <button class="sidebar-section-action" id="addProjectBtn"
+                onclick="lincolnSidebar.openNewProjectPanel()" title="Add project">
+          <i class="ti ti-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="sidebar-project-list" id="projectList">
+        <div class="sidebar-empty-state">Loading projects…</div>
+      </div>
+    </div>
+
+    <!-- Chat history with its own + New chat button -->
+    <div class="sidebar-history">
+      <div class="sidebar-section-label">
+        Chat history
+        <button class="sidebar-section-action" onclick="lincolnChat.newSession()" title="New chat">
+          <i class="ti ti-plus" aria-hidden="true"></i>
+        </button>
+      </div>
+      <div class="sidebar-history-list" id="historyList">
+        <!-- Populated by lincoln_sidebar.js — only real sessions shown -->
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="sidebar-nav-item" onclick="lincolnSettings.open()">
+        <i class="ti ti-settings" aria-hidden="true"></i>
+        Settings
+      </button>
+    </div>
+
+  </aside>
+
+  <!-- ── MAIN CONTENT ──────────────────────────────────────────────────────── -->
+  <main class="lincoln-main" id="lincolnMain">
+
+    <!-- TOPBAR -->
+    <header class="lincoln-topbar" id="lincolnTopbar">
+      <div class="topbar-left">
+        <span class="topbar-project-badge" id="topbarProjectBadge">No project</span>
+        <span class="topbar-mode-badge">
+          <i class="ti ti-lock" aria-hidden="true"></i>
+          Suggestion mode
+        </span>
+      </div>
+      <div class="topbar-right">
+        <button class="topbar-icon-btn" onclick="lincolnHelp.open()" title="Help">
+          <i class="ti ti-help" aria-hidden="true"></i>
+        </button>
+        <button class="topbar-icon-btn" onclick="lincolnChat.newSession()" title="New chat">
+          <i class="ti ti-edit" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- SESSION CONTEXT STRIP -->
+    <div class="lincoln-context-strip" id="contextStrip" style="display:none">
+      <div class="context-strip-content" id="contextStripContent"></div>
+      <button class="context-strip-close" onclick="lincolnChat.dismissContextStrip()" title="Dismiss">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+
+    <!-- CONTENT AREA -->
+    <div class="lincoln-content-area" id="contentArea">
+
+      <!-- CHAT COLUMN -->
+      <div class="lincoln-chat-col" id="chatCol">
+
+        <!-- CHAT MODE -->
+        <div class="lincoln-chat-view" id="chatView">
+          <div class="lincoln-chat-messages" id="chatMessages">
+            <div class="lincoln-welcome" id="welcomeMessage">
+              <div class="welcome-logo">L</div>
+              <div class="welcome-text">
+                <div class="welcome-title">Lincoln is ready</div>
+                <div class="welcome-subtitle">Select a project from the sidebar, then ask anything.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- INPUT BAR -->
+          <div class="lincoln-input-area">
+            <div class="lincoln-input-box">
+              <div class="input-box-top">
+                <textarea
+                  id="chatInput"
+                  class="lincoln-textarea"
+                  placeholder="Ask anything, or type a command…"
+                  rows="1"
+                  onkeydown="lincolnChat.handleInputKeydown(event)"
+                  oninput="lincolnChat.autoResizeTextarea(this)"
+                ></textarea>
+                <button class="lincoln-send-btn" id="sendBtn" onclick="lincolnChat.sendMessage()" title="Send">
+                  <i class="ti ti-arrow-up" aria-hidden="true"></i>
+                </button>
+              </div>
+              <div class="input-box-bottom">
+                <button class="input-attach-btn" onclick="lincolnChat.openFileAttach()" title="Attach file">
+                  <i class="ti ti-paperclip" aria-hidden="true"></i>
+                </button>
+                <div class="input-model-pill" id="modelPill" onclick="lincolnSettings.toggleModelDropdown()">
+                  <i class="ti ti-cpu" aria-hidden="true"></i>
+                  <span id="activeModelLabel">qwen3.5:9b</span>
+                  <i class="ti ti-chevron-down" aria-hidden="true"></i>
+                </div>
+                <div class="input-cmd-hints">
+                  <button class="cmd-hint" onclick="lincolnChat.insertCommand('search ')">search …</button>
+                  <button class="cmd-hint" onclick="lincolnChat.insertCommand('fetch ')">fetch url</button>
+                  <button class="cmd-hint" onclick="lincolnChat.insertCommand('memory show')">memory</button>
+                </div>
+              </div>
+            </div>
+            <div class="lincoln-model-dropdown" id="modelDropdown">
+              <!-- Populated by lincoln_settings.js -->
+            </div>
+          </div>
+        </div>
+
+        <!-- AIDER MODE -->
+        <div class="lincoln-aider-view" id="aiderView" style="display:none">
+          <div class="aider-panel">
+            <div class="aider-panel-icon"><i class="ti ti-terminal-2" aria-hidden="true"></i></div>
+            <div class="aider-panel-title">Edit files with Aider</div>
+            <div class="aider-panel-body">
+              Aider gives Lincoln the ability to read, suggest, and apply changes to your project files.
+              All changes require your approval before anything is written to disk.
+            </div>
+            <div class="aider-panel-project" id="aiderProjectLabel">No project selected</div>
+            <button class="aider-launch-btn" onclick="lincolnSidebar.launchAider()">
+              <i class="ti ti-terminal-2" aria-hidden="true"></i>
+              Open terminal and launch Aider
+            </button>
+            <div class="aider-panel-note">
+              Aider opens in your terminal. Return to this window when done.
+            </div>
+          </div>
+        </div>
+
+        <!-- MEMORY MODE -->
+        <div class="lincoln-memory-view" id="memoryView" style="display:none">
+          <div class="memory-panel">
+            <div class="memory-panel-header">
+              <div class="memory-panel-title">Session memory</div>
+              <button class="memory-save-btn" onclick="lincolnChat.saveMemory()">
+                <i class="ti ti-device-floppy" aria-hidden="true"></i>
+                Save current session
+              </button>
+            </div>
+            <div class="memory-entries" id="memoryEntries"></div>
+          </div>
+        </div>
+
+      </div><!-- /.lincoln-chat-col -->
+
+      <!-- CANVAS COLUMN -->
+      <div class="lincoln-canvas-col" id="canvasCol">
+        <div class="canvas-header">
+          <div class="canvas-title">
+            <i class="ti ti-code" aria-hidden="true"></i>
+            Canvas
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="canvas-project-label" id="canvasProjectLabel"></span>
+            <button class="canvas-collapse-btn" id="canvasCollapseBtn"
+                    onclick="lincolnCanvasUI.toggle()" title="Collapse canvas">
+              <i class="ti ti-layout-sidebar-right" aria-hidden="true"></i>
+            </button>
+          </div>
+        </div>
+        <div class="canvas-tabs">
+          <button class="canvas-tab active" id="canvasTabCode"  onclick="lincolnCanvas.switchTab('code')">Code</button>
+          <button class="canvas-tab"        id="canvasTabFiles" onclick="lincolnCanvas.switchTab('files')">Files</button>
+          <button class="canvas-tab"        id="canvasTabDiff"  onclick="lincolnCanvas.switchTab('diff')">Diff</button>
+        </div>
+        <div class="canvas-body" id="canvasBody">
+          <!-- Rendered by lincolnCanvas -->
+        </div>
+      </div>
+
+    </div><!-- /.lincoln-content-area -->
+  </main>
+
+</div><!-- /.lincoln-shell -->
+
+<!-- ── NEW PROJECT PANEL ─────────────────────────────────────────────────── -->
+<div class="lincoln-overlay" id="newProjectOverlay" style="display:none">
+  <div class="lincoln-panel" id="newProjectPanel">
+    <div class="panel-header">
+      <div class="panel-title">New project</div>
+      <button class="panel-close" onclick="lincolnSidebar.closeNewProjectPanel()">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="panel-body">
+      <div class="form-field">
+        <label class="form-label" for="newProjectName">Project name</label>
+        <input type="text" id="newProjectName" class="form-input" placeholder="Options Pricing">
+        <div class="form-hint">Used as the display name in the sidebar.</div>
+      </div>
+      <div class="form-field">
+        <label class="form-label" for="newProjectPath">Project folder path</label>
+        <div style="display:flex;gap:6px">
+          <input type="text" id="newProjectPath" class="form-input" style="flex:1"
+                 placeholder="B:\OptionsPricing">
+          <button class="panel-btn-primary" style="white-space:nowrap;flex-shrink:0"
+                  onclick="lincolnSidebar.openFileBrowser('folder', path => { document.getElementById('newProjectPath').value = path; })"
+                  title="Browse for folder">
+            <i class="ti ti-folder-open" aria-hidden="true"></i> Browse
+          </button>
+        </div>
+        <div class="form-hint">Absolute path to the project folder on disk.</div>
+      </div>
+      <div class="form-preview" id="newProjectPreview" style="display:none"></div>
+      <div class="form-error"   id="newProjectError"   style="display:none"></div>
+    </div>
+    <div class="panel-footer">
+      <button class="panel-btn-secondary" onclick="lincolnSidebar.closeNewProjectPanel()">Cancel</button>
+      <button class="panel-btn-primary"   onclick="lincolnSidebar.previewProject()">Preview files</button>
+      <button class="panel-btn-confirm"   id="createProjectBtn"
+              onclick="lincolnSidebar.createProject()" style="display:none">
+        Create and index
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SETTINGS PANEL ────────────────────────────────────────────────────── -->
+<div class="lincoln-overlay" id="settingsOverlay" style="display:none">
+  <div class="lincoln-panel lincoln-settings-panel" id="settingsPanel">
+    <div class="panel-header">
+      <div class="panel-title">Settings</div>
+      <button class="panel-close" onclick="lincolnSettings.close()">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="panel-body settings-body">
+
+      <div class="settings-section">
+        <div class="settings-section-title">Appearance</div>
+        <div class="settings-row">
+          <div class="settings-label">Theme</div>
+          <div class="theme-toggle" id="themeToggle">
+            <button class="theme-btn" data-theme="light"  onclick="lincolnSettings.setTheme('light')">Light</button>
+            <button class="theme-btn" data-theme="dark"   onclick="lincolnSettings.setTheme('dark')">Dark</button>
+            <button class="theme-btn active" data-theme="system" onclick="lincolnSettings.setTheme('system')">System</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Model</div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">Default model</div>
+            <div class="settings-sublabel">Loaded on startup · change per session from the input bar</div>
+          </div>
+          <select class="settings-select" id="defaultModelSelect" onchange="lincolnSettings.setDefaultModel(this.value)">
+          </select>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">Embedding model</div>
+            <div class="settings-sublabel">Fixed — changing requires full re-index of every project</div>
+          </div>
+          <span class="settings-readonly-badge" id="embedModelBadge">nomic-embed-text</span>
+        </div>
+        <div class="settings-row">
+          <div>
+            <div class="settings-label">Suggestion mode</div>
+            <div class="settings-sublabel">Aider active — no file changes without your approval</div>
+          </div>
+          <span class="settings-status-badge settings-badge-on">On</span>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">RAG</div>
+        <div class="settings-row">
+          <div class="settings-label">Chunks retrieved per query</div>
+          <input type="number" class="settings-number-input" id="topKInput"
+            min="1" max="20" value="5"
+            onchange="lincolnSettings.saveTopK(this.value)">
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">System status</div>
+        <div class="settings-status-list" id="systemStatusList"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ── HELP MODAL ─────────────────────────────────────────────────────────── -->
+<div class="lincoln-overlay" id="helpOverlay" style="display:none">
+  <div class="lincoln-panel" style="width:500px;max-height:80vh">
+    <div class="panel-header">
+      <div class="panel-title">
+        <i class="ti ti-help" style="margin-right:6px"></i>
+        What can Lincoln do?
+      </div>
+      <button class="panel-close" onclick="lincolnHelp.close()">
+        <i class="ti ti-x" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="panel-body" style="gap:14px">
+
+      <div class="help-section">
+        <div class="help-section-title">Chat</div>
+        <div class="help-item"><span class="help-badge">Ask</span> Any question — Lincoln answers using your project code as context</div>
+        <div class="help-item"><span class="help-badge">RAG</span> Select a project → your codebase is retrieved automatically</div>
+        <div class="help-item"><span class="help-badge">File</span> Click 📎 to attach a .py / .f90 / .txt / .md file as context</div>
+        <div class="help-item"><span class="help-badge">Cmd</span> <code>search query</code> — web search via DuckDuckGo</div>
+        <div class="help-item"><span class="help-badge">Cmd</span> <code>fetch url</code> — fetch a web page and summarise it</div>
+        <div class="help-item"><span class="help-badge">Cmd</span> <code>memory show</code> — show saved session memories</div>
+      </div>
+
+      <div class="help-section">
+        <div class="help-section-title">Canvas</div>
+        <div class="help-item"><span class="help-badge">Code</span> Code blocks from responses appear here automatically</div>
+        <div class="help-item"><span class="help-badge">Files</span> See all canvas blocks — save to disk or delete individually</div>
+        <div class="help-item"><span class="help-badge">Diff</span> Compare old vs new version when the same file is regenerated</div>
+        <div class="help-item"><span class="help-badge">↓</span> Download any block as a file — use the save button per block</div>
+      </div>
+
+      <div class="help-section">
+        <div class="help-section-title">Projects</div>
+        <div class="help-item"><span class="help-badge">+</span> Add a project folder → Lincoln indexes all code into ChromaDB</div>
+        <div class="help-item"><span class="help-badge">RAG</span> 1 156 vectors from OptionsPricing — automatically retrieved per query</div>
+        <div class="help-item"><span class="help-badge">Re-index</span> Click a project → index button to rebuild after code changes</div>
+      </div>
+
+      <div class="help-section">
+        <div class="help-section-title">Memory</div>
+        <div class="help-item"><span class="help-badge">Save</span> Memory → Save current session — appears as context next launch</div>
+        <div class="help-item"><span class="help-badge">Strip</span> Dismiss the context strip at the top once reviewed</div>
+      </div>
+
+      <div class="help-section">
+        <div class="help-section-title">Edit files (Aider)</div>
+        <div class="help-item"><span class="help-badge">Aider</span> Switch to Aider mode → launch in terminal for code edits</div>
+        <div class="help-item"><span class="help-badge">Safe</span> Suggestion mode is always on — no file is written without your approval</div>
+      </div>
+
+      <div style="padding:10px 12px;background:var(--bg-page);border:0.5px solid var(--border);border-radius:var(--radius-md);font-size:11.5px;color:var(--text-muted)">
+        Lincoln is fully local — Ollama at localhost:11434, no cloud, no telemetry.
+        All data stays on your machine.
+      </div>
+
+    </div>
+    <div class="panel-footer" style="justify-content:flex-end">
+      <button class="panel-btn-confirm" onclick="lincolnHelp.close()">Got it</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── INDEX PROGRESS TOAST ───────────────────────────────────────────────── -->
+<div class="lincoln-toast" id="indexToast" style="display:none">
+  <div class="toast-content">
+    <div class="toast-spinner"></div>
+    <div class="toast-message" id="indexToastMessage">Building index…</div>
+  </div>
+</div>
+
+<!-- ── JAVASCRIPT ─────────────────────────────────────────────────────────── -->
+<script src="{{ url_for('static', filename='js/lincoln_sidebar.js') }}"></script>
+<script src="{{ url_for('static', filename='js/lincoln_canvas.js') }}"></script>
+<script src="{{ url_for('static', filename='js/lincoln_settings.js') }}"></script>
+<script src="{{ url_for('static', filename='js/lincoln_chat.js') }}"></script>
+<script>
+  // ── Canvas collapse toggle ────────────────────────────────────────────────
+  const lincolnCanvasUI = (() => {
+    let _collapsed = false;
+    function toggle() {
+      _collapsed = !_collapsed;
+      const col = document.getElementById('canvasCol');
+      const btn = document.getElementById('canvasCollapseBtn');
+      if (_collapsed) {
+        col.style.width    = '0';
+        col.style.minWidth = '0';
+        col.style.overflow = 'hidden';
+        col.style.borderLeft = 'none';
+        if (btn) btn.title = 'Expand canvas';
+      } else {
+        col.style.width    = 'var(--canvas-width)';
+        col.style.minWidth = 'var(--canvas-width)';
+        col.style.overflow = 'hidden';
+        col.style.borderLeft = '0.5px solid var(--border)';
+        if (btn) btn.title = 'Collapse canvas';
+      }
+    }
+    return { toggle };
+  })();
+
+  // ── Help modal ────────────────────────────────────────────────────────────
+  const lincolnHelp = (() => {
+    function open()  { document.getElementById('helpOverlay').style.display = 'flex'; }
+    function close() { document.getElementById('helpOverlay').style.display = 'none'; }
+    // Close on overlay click
+    document.addEventListener('click', e => {
+      const overlay = document.getElementById('helpOverlay');
+      if (e.target === overlay) close();
+    });
+    return { open, close };
+  })();
+</script>
+
+</body>
+</html>

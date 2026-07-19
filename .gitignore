@@ -183,3 +183,21 @@ cython_debug/
 # Aider tools for Agentic AI enabling
 .aider*
 !.aider.conf.yml
+
+# ── Visual Studio Community ───────────────────────────────────────────────────
+.vs/
+*.slnx
+*.vsidx
+*.wsuo
+
+# ── Lincoln runtime data ──────────────────────────────────────────────────────
+data/chroma_db/
+data/lincoln_database.db
+data/uploads/
+data/mlflow/
+mlruns/
+
+# ── OS noise ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
