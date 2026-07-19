@@ -281,6 +281,15 @@ a { color: var(--text-accent); }
 }
 .history-delete-btn:hover { color: var(--text-danger); background: var(--danger-bg); }
 
+.history-group-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 8px 3px;
+  font-weight: 500;
+}
+
 .sidebar-footer {
   margin-top: auto;
   padding-top: 10px;
@@ -678,7 +687,7 @@ a { color: var(--text-accent); }
   gap: 6px;
 }
 .canvas-title i { font-size: 14px; }
-.canvas-project-label { font-size: 10px; color: var(--text-muted); }
+.canvas-project-label { font-size: 10px; color: var(--text-muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .canvas-tabs {
   display: flex;
   border-bottom: 0.5px solid var(--border);

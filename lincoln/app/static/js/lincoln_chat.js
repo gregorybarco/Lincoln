@@ -483,12 +483,17 @@ const lincolnChat = (() => {
   function _clearMessages() {
     const container = document.getElementById('chatMessages');
     if (!container) return;
+    const projectName = _activeProject?.display_name || '';
+    const title    = projectName ? `${projectName}` : 'Lincoln is ready';
+    const subtitle = projectName
+      ? `New chat in <strong>${projectName}</strong>. Ask anything — your project files are available as context.`
+      : 'Select a project from the sidebar, then ask anything.';
     container.innerHTML = `
       <div class="lincoln-welcome" id="welcomeMessage">
         <div class="welcome-logo">L</div>
         <div class="welcome-text">
-          <div class="welcome-title">Lincoln is ready</div>
-          <div class="welcome-subtitle">Select a project from the sidebar, then ask anything.</div>
+          <div class="welcome-title">${title}</div>
+          <div class="welcome-subtitle">${subtitle}</div>
         </div>
       </div>
     `;

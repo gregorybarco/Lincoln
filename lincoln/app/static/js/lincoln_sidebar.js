@@ -13,6 +13,7 @@
 const lincolnSidebar = (() => {
 
   let _activeProjectId = null;
+  let _activeProject   = null;
   let _activeMode      = 'chat';
   let _indexPollTimer  = null;
 
@@ -69,6 +70,7 @@ const lincolnSidebar = (() => {
 
   function selectProject(projectId, project) {
     _activeProjectId = projectId;
+    _activeProject   = project;
 
     document.querySelectorAll('.sidebar-project-item').forEach(el => {
       el.classList.remove('active');
@@ -84,7 +86,7 @@ const lincolnSidebar = (() => {
     if (badge) badge.textContent = project.display_name || project.name;
 
     const canvasLabel = document.getElementById('canvasProjectLabel');
-    if (canvasLabel) canvasLabel.textContent = project.display_name || project.name;
+    if (canvasLabel) canvasLabel.textContent = '';  // set per-session not per-project
 
     const aiderLabel = document.getElementById('aiderProjectLabel');
     if (aiderLabel) aiderLabel.textContent = project.display_name || project.name;
@@ -93,6 +95,13 @@ const lincolnSidebar = (() => {
 
     // Canvas is siloed per project — clear when switching
     if (typeof lincolnCanvas !== 'undefined') lincolnCanvas.clear();
+
+    // Switch to chat mode and start a new session inside this project
+    switchMode('chat');
+    if (typeof lincolnChat !== 'undefined') lincolnChat.newSession();
+
+    // Re-render history so this project's chats appear grouped
+    loadHistory();
   }
 
 
@@ -383,29 +392,64 @@ const lincolnSidebar = (() => {
       return;
     }
 
-    // Bulk clear button appears when there is history
+    // Add bulk clear button to header if not already there
     const header = document.querySelector('.sidebar-history .sidebar-section-label');
     if (header && !document.getElementById('clearAllHistoryBtn')) {
-      const clearBtn = document.createElement('button');
-      clearBtn.id        = 'clearAllHistoryBtn';
-      clearBtn.className = 'sidebar-section-action';
-      clearBtn.title     = 'Clear all history';
-      clearBtn.innerHTML = '<i class="ti ti-trash" style="color:var(--text-danger)"></i>';
-      clearBtn.onclick   = () => lincolnSidebar.clearAllHistory();
+      const clearBtn       = document.createElement('button');
+      clearBtn.id          = 'clearAllHistoryBtn';
+      clearBtn.className   = 'sidebar-section-action';
+      clearBtn.title       = 'Clear all history';
+      clearBtn.innerHTML   = '<i class="ti ti-trash" style="color:var(--text-danger)"></i>';
+      clearBtn.onclick     = () => lincolnSidebar.clearAllHistory();
       header.appendChild(clearBtn);
     }
 
-    list.innerHTML = sessions.map(s => `
-      <div class="sidebar-history-item" id="historyItem_${s.id}"
-           onclick="lincolnSidebar._openHistorySession(${s.id})">
-        <div class="history-title">${_esc(s.title)}</div>
-        <div class="history-date">${_date(s.updated_at)}</div>
-        <button class="history-delete-btn" title="Delete chat"
-                onclick="event.stopPropagation();lincolnSidebar.deleteSession(${s.id})">
-          <i class="ti ti-trash"></i>
-        </button>
-      </div>
-    `).join('');
+    // Group sessions: active project's chats first, then general, then others
+    const projectSessions = sessions.filter(s => s.project_id === _activeProjectId && _activeProjectId);
+    const generalSessions = sessions.filter(s => !s.project_id);
+    const otherSessions   = sessions.filter(s => s.project_id && s.project_id !== _activeProjectId);
+
+    function _sessionHTML(s) {
+      return `
+        <div class="sidebar-history-item" id="historyItem_${s.id}"
+             onclick="lincolnSidebar._openHistorySession(${s.id})">
+          <div class="history-title">${_esc(s.title)}</div>
+          <div class="history-date">${_date(s.updated_at)}</div>
+          <button class="history-delete-btn" title="Delete chat"
+                  onclick="event.stopPropagation();lincolnSidebar.deleteSession(${s.id})">
+            <i class="ti ti-trash"></i>
+          </button>
+        </div>`;
+    }
+
+    let html = '';
+
+    // Active project chats — no label needed, they're the current context
+    if (projectSessions.length && _activeProjectId) {
+      html += projectSessions.map(_sessionHTML).join('');
+    }
+
+    // General chats
+    if (generalSessions.length) {
+      if (projectSessions.length) {
+        html += `<div class="history-group-label">General</div>`;
+      }
+      html += generalSessions.map(_sessionHTML).join('');
+    }
+
+    // Other project chats — show which project they belong to
+    const otherByProject = {};
+    otherSessions.forEach(s => {
+      const label = s.project_display_name || 'Other';
+      if (!otherByProject[label]) otherByProject[label] = [];
+      otherByProject[label].push(s);
+    });
+    Object.entries(otherByProject).forEach(([label, group]) => {
+      html += `<div class="history-group-label">${_esc(label)}</div>`;
+      html += group.map(_sessionHTML).join('');
+    });
+
+    list.innerHTML = html;
   }
 
   function _openHistorySession(sessionId) {

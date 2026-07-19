@@ -47,31 +47,98 @@ log = logging.getLogger("lincoln.rag_index_service")
 
 
 # ── File collection rules ─────────────────────────────────────────────────────
-# These exclusion rules mirror the OptionsPricing .gitignore exactly.
-# They apply to all projects — no secrets, binaries, or data files reach
-# the embedding pipeline regardless of which project is being indexed.
+# Exclusions: no secrets, binaries, compiled outputs, or data files.
+# Inclusions: all common source code and markup files.
+# This is YOUR machine — include everything that could be useful context.
 
 _EXCLUDE_DIRS = {
     "__pycache__", ".git", "venv", "env", ".venv", "lib64",
     "build", "dist", ".eggs", "node_modules", ".idea", ".vscode",
     "tokens", "secrets", "0_documentation", "build_bridge",
     "training_weights", "01_raw", "02_interim", "03_parameters",
-    "04_results", "data",
+    "04_results", ".next", ".nuxt", "coverage", ".cache",
+    "CMakeFiles", "x64", "x86", "Debug", "Release",
 }
 
 _EXCLUDE_PATTERNS = {
+    # Data and binary formats
     "*.csv", "*.parquet", "*.dat", "*.bin",
     "*.npy", "*.npz", "*.pkl", "*.h5", "*.hdf5",
+    # Compiled outputs
     "*.so", "*.dll", "*.o", "*.obj", "*.mod", "*.smod",
-    "*.lib", "*.a", "*.exe", "*.out", "*.pdb",
-    "*.pt", "*.pth", "*.ckpt",
+    "*.lib", "*.a", "*.exe", "*.out", "*.pdb", "*.class",
+    "*.pyc", "*.pyo",
+    # ML weights
+    "*.pt", "*.pth", "*.ckpt", "*.onnx",
+    # Secrets
     ".env", ".env.*", "*.env",
     "*.key", "*.pem", "*.p12", "*.pfx", "*.crt", "*.cer",
-    "*.json", "*.log", "*.suo", "*.user",
+    # Noise
+    "*.log", "*.suo", "*.user", "*.lock",
+    # Large generated files
+    "package-lock.json", "yarn.lock", "*.min.js", "*.min.css",
+    "*.map",
 }
 
-_INCLUDE_EXTENSIONS = {".py", ".f90", ".f", ".for", ".f95", ".f03", ".md"}
-_FORTRAN_EXTENSIONS = {".f90", ".f", ".for", ".f95", ".f03"}
+# All common source code and markup extensions
+_INCLUDE_EXTENSIONS = {
+    # Python
+    ".py", ".pyi",
+    # Fortran
+    ".f90", ".f", ".for", ".f95", ".f03", ".f08",
+    # C / C++
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
+    # Java / Kotlin / Scala
+    ".java", ".kt", ".kts", ".scala",
+    # JavaScript / TypeScript
+    ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
+    # Web
+    ".html", ".htm", ".css", ".scss", ".sass", ".less", ".svelte", ".vue",
+    # C# / F# / VB
+    ".cs", ".fs", ".fsx", ".vb",
+    # Go / Rust / Swift / Zig
+    ".go", ".rs", ".swift", ".zig",
+    # Shell / scripting
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+    # Config and data that's useful context
+    ".toml", ".yaml", ".yml", ".ini", ".cfg", ".conf",
+    ".xml", ".gradle", ".cmake",
+    # Docs / markdown
+    ".md", ".rst", ".txt", ".tex",
+    # SQL
+    ".sql",
+    # Ruby / PHP / Perl / Lua / R
+    ".rb", ".php", ".pl", ".lua", ".r",
+}
+
+_FORTRAN_EXTENSIONS = {".f90", ".f", ".for", ".f95", ".f03", ".f08"}
+
+
+def _get_language(file_path: Path) -> str:
+    """Return a human-readable language label for a source file."""
+    suffix = file_path.suffix.lower()
+    _LANG_MAP = {
+        ".py": "python", ".pyi": "python",
+        ".f90": "fortran", ".f": "fortran", ".for": "fortran",
+        ".f95": "fortran", ".f03": "fortran", ".f08": "fortran",
+        ".c": "c", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp",
+        ".h": "c/cpp", ".hh": "cpp", ".hpp": "cpp", ".hxx": "cpp",
+        ".java": "java", ".kt": "kotlin", ".scala": "scala",
+        ".js": "javascript", ".mjs": "javascript", ".jsx": "javascript",
+        ".ts": "typescript", ".tsx": "typescript",
+        ".html": "html", ".htm": "html",
+        ".css": "css", ".scss": "scss", ".sass": "sass",
+        ".cs": "csharp", ".fs": "fsharp",
+        ".go": "go", ".rs": "rust", ".swift": "swift",
+        ".sh": "shell", ".bash": "shell", ".ps1": "powershell",
+        ".bat": "batch", ".cmd": "batch",
+        ".sql": "sql",
+        ".md": "markdown", ".rst": "markdown",
+        ".rb": "ruby", ".php": "php", ".lua": "lua",
+        ".toml": "toml", ".yaml": "yaml", ".yml": "yaml",
+        ".xml": "xml", ".cmake": "cmake",
+    }
+    return _LANG_MAP.get(suffix, "text")
 
 
 # ── Internal file utilities ───────────────────────────────────────────────────
@@ -114,16 +181,6 @@ def _should_exclude(path: Path) -> bool:
         if path.match(pattern):
             return True
     return False
-
-
-def _get_language(file_path: Path) -> str:
-    """Return the language label for a source file."""
-    suffix = file_path.suffix.lower()
-    if suffix in _FORTRAN_EXTENSIONS:
-        return "fortran"
-    if suffix == ".md":
-        return "markdown"
-    return "python"
 
 
 def collect_indexable_files(project_path: Path) -> list[Path]:
@@ -193,15 +250,19 @@ def build_project_index(project: dict, force_rebuild: bool = False) -> int:
     from llama_index.llms.ollama import Ollama
     from llama_index.vector_stores.chroma import ChromaVectorStore
 
-    project_path = Path(project["path"])
+    # Use code_path if set, otherwise fall back to path
+    # '.' is the sentinel for conversation-only projects — reject it
+    raw_path     = project.get("code_path") or project.get("path") or ""
+    project_path = Path(raw_path) if raw_path and raw_path != "." else None
+
+    if not project_path or not project_path.exists():
+        raise FileNotFoundError(
+            f"No valid source folder is set for project '{project['display_name']}'.\n"
+            f"Open project settings → set a RAG source folder → then index."
+        )
+
     collection   = project["collection"]
     project_name = project["name"]
-
-    if not project_path.exists():
-        raise FileNotFoundError(
-            f"Project path does not exist: {project_path}\n"
-            f"Update the project path from the Lincoln UI."
-        )
 
     log.info(f"Building index for project '{project['display_name']}'")
     log.info(f"  Path       : {project_path}")
@@ -234,10 +295,12 @@ def build_project_index(project: dict, force_rebuild: bool = False) -> int:
 
     # Collect and filter files
     all_files = collect_indexable_files(project_path)
-    py_count  = sum(1 for f in all_files if f.suffix == ".py")
-    f90_count = sum(1 for f in all_files if f.suffix.lower() in _FORTRAN_EXTENSIONS)
-    md_count  = sum(1 for f in all_files if f.suffix.lower() == ".md")
-    log.info(f"  Files found: {len(all_files)} ({py_count} Python, {f90_count} Fortran, {md_count} Markdown)")
+    by_lang   = {}
+    for f in all_files:
+        lang = _get_language(f)
+        by_lang[lang] = by_lang.get(lang, 0) + 1
+    lang_summary = ", ".join(f"{v} {k}" for k, v in sorted(by_lang.items()))
+    log.info(f"  Files found: {len(all_files)} ({lang_summary or 'none'})")
 
     if not all_files:
         log.warning("No indexable files found. Check project path and exclusion rules.")
@@ -389,18 +452,12 @@ def query_project_index(
 def dry_run_project(project: dict) -> dict:
     """
     Preview which files would be indexed for a project without embedding anything.
-    Used by the UI to show a file count preview before triggering an index build.
-
-    Args:
-        project : Project dict from lincoln_database
-
-    Returns:
-        Dict with keys: files (list of file info dicts), total, by_language
     """
-    project_path = Path(project["path"])
+    raw_path     = project.get("code_path") or project.get("path") or ""
+    project_path = Path(raw_path) if raw_path and raw_path != "." else None
 
-    if not project_path.exists():
-        return {"error": f"Path does not exist: {project_path}"}
+    if not project_path or not project_path.exists():
+        return {"error": "No valid source folder set. Open project settings to add one."}
 
     all_files   = collect_indexable_files(project_path)
     file_infos  = []
