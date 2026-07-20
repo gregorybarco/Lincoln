@@ -94,25 +94,36 @@ const lincolnChat = (() => {
       const res      = await fetch(`/api/history/${sessionId}`);
       const messages = await res.json();
       _sessionId     = sessionId;
-      _clearMessages();
-      _hideWelcome();
+
+      // Wipe the message container cleanly — do NOT call _clearMessages() here
+      // because that would re-inject the project home screen at the top of the chat.
+      const container = document.getElementById('chatMessages');
+      if (container) container.innerHTML = '';
+
       _clearPendingFile();
       if (typeof lincolnCanvas !== 'undefined') lincolnCanvas.clear();
 
+      let lastUserText = '';
       messages.forEach(msg => {
         if (msg.role === 'user') {
+          lastUserText = msg.content;
           _appendUserMessage(msg.content);
         } else if (msg.role === 'assistant') {
           _appendAssistantMessage(msg.content, []);
           if (typeof lincolnCanvas !== 'undefined') {
             const blocks = lincolnCanvas.extractCodeBlocks(msg.content);
-            blocks.forEach(block => lincolnCanvas.pinCodeBlock({
-              language:    block.language,
-              filename:    _guessFilename(block.content, block.language),
-              content:     block.content,
-              projectName: _activeProject?.display_name || '',
-              sessionId:   sessionId,
-            }));
+            blocks.forEach((block, i) => {
+              const base = _deriveFilename(lastUserText, block.language);
+              const suffix = blocks.length > 1 ? `_part${i + 1}` : '';
+              const baseName = base.replace(/(\.[^.]+)$/, suffix + '$1');
+              lincolnCanvas.pinCodeBlock({
+                language:    block.language,
+                filename:    lincolnCanvas.resolveFilename(baseName, sessionId),
+                content:     block.content,
+                projectName: _activeProject?.display_name || '',
+                sessionId:   sessionId,
+              });
+            });
           }
         }
       });
@@ -241,13 +252,19 @@ const lincolnChat = (() => {
 
               if (typeof lincolnCanvas !== 'undefined') {
                 const blocks = lincolnCanvas.extractCodeBlocks(fullText);
-                blocks.forEach(block => lincolnCanvas.pinCodeBlock({
-                  language:    block.language,
-                  filename:    _guessFilename(block.content, block.language),
-                  content:     block.content,
-                  projectName: _activeProject?.display_name || '',
-                  sessionId:   _sessionId,
-                }));
+                blocks.forEach((block, i) => {
+                  // Each block in the same response gets a suffix if >1 block
+                  const base = _deriveFilename(text, block.language);
+                  const suffix = blocks.length > 1 ? `_part${i + 1}` : '';
+                  const baseName = base.replace(/(\.[^.]+)$/, suffix + '$1');
+                  lincolnCanvas.pinCodeBlock({
+                    language:    block.language,
+                    filename:    lincolnCanvas.resolveFilename(baseName, _sessionId),
+                    content:     block.content,
+                    projectName: _activeProject?.display_name || '',
+                    sessionId:   _sessionId,
+                  });
+                });
               }
               if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadHistory();
             }
@@ -428,9 +445,29 @@ const lincolnChat = (() => {
     }
   }
 
+  // ── Markdown + syntax highlighting setup ─────────────────────────────────
+  //
+  // Configure marked once with an hljs renderer so every call to _md()
+  // produces highlighted <pre><code> blocks automatically.
+
+  (function _initMarked() {
+    if (typeof marked === 'undefined' || typeof hljs === 'undefined') return;
+    const renderer = new marked.Renderer();
+    renderer.code = function(code, lang) {
+      // marked v9 passes an object or a string depending on version
+      const language = (typeof lang === 'object' ? lang.lang : lang) || '';
+      const escaped  = language && hljs.getLanguage(language)
+        ? hljs.highlight(code, { language }).value
+        : hljs.highlightAuto(code).value;
+      const cls = language ? ` class="language-${language} hljs"` : ' class="hljs"';
+      return `<pre><code${cls}>${escaped}</code></pre>`;
+    };
+    marked.use({ renderer, breaks: true, gfm: true });
+  })();
+
   function _md(text) {
     if (typeof marked !== 'undefined') {
-      return marked.parse(text || '', { breaks: true, gfm: true });
+      return marked.parse(text || '');
     }
     return _esc(text)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -440,21 +477,24 @@ const lincolnChat = (() => {
 
   function _applyFormatting(element) {
     if (!element) return;
+    // hljs: highlight any code blocks that weren't handled by the renderer
+    // (e.g. blocks without a language hint)
     if (typeof hljs !== 'undefined') {
-      element.querySelectorAll('pre code').forEach((block) => {
+      element.querySelectorAll('pre code:not(.hljs)').forEach(block => {
         hljs.highlightElement(block);
       });
     }
+    // KaTeX math rendering
     if (typeof renderMathInElement !== 'undefined') {
       renderMathInElement(element, {
         delimiters: [
-          {left: '$$', right: '$$', display: true},
-          {left: '\\[', right: '\\]', display: true},
-          {left: '$', right: '$', display: false},
-          {left: '\\(', right: '\\)', display: false}
+          { left: '$$', right: '$$',   display: true  },
+          { left: '\\[', right: '\\]', display: true  },
+          { left: '$',  right: '$',    display: false },
+          { left: '\\(', right: '\\)', display: false },
         ],
         throwOnError: false,
-        output: 'html'
+        output: 'html',
       });
     }
   }
@@ -626,12 +666,44 @@ const lincolnChat = (() => {
     return d.innerHTML;
   }
 
-  function _guessFilename(content, language) {
-    const firstLine = content.split('\n')[0];
-    const match     = firstLine.match(/(?:filename|file):\s*(\S+)/i);
-    if (match) return match[1];
-    const ext = { python:'.py', fortran:'.f90', javascript:'.js', html:'.html', css:'.css', sql:'.sql', bash:'.sh' };
-    return `code${ext[language] || '.txt'}`;
+  // Language → extension map
+  const _LANG_EXT = {
+    python: '.py', fortran: '.f90', javascript: '.js', typescript: '.ts',
+    html: '.html', css: '.css', sql: '.sql', bash: '.sh', sh: '.sh',
+    json: '.json', markdown: '.md', r: '.r', cpp: '.cpp', c: '.c',
+    java: '.java', rust: '.rs', go: '.go', ruby: '.rb', text: '.txt',
+  };
+
+  /**
+   * Derive a canvas filename from the user's prompt + code language.
+   * e.g. "fix the context window in ollama service" + python
+   *   -> "context_window_ollama_service.py"
+   * If user named a lincoln_ file explicitly, use that name directly.
+   * Versioning (_v2, _v3 ...) applied by lincolnCanvas.resolveFilename().
+   */
+  function _deriveFilename(userText, language) {
+    const ext = _LANG_EXT[language] || '.txt';
+
+    // If user mentioned a lincoln_ file by name, use it
+    const lincolnMatch = userText.match(/\b(lincoln_[A-Za-z0-9_]+(?:\.[A-Za-z0-9]+)?)\b/i);
+    if (lincolnMatch) {
+      const name = lincolnMatch[1];
+      return name.includes('.') ? name : name + ext;
+    }
+
+    // Build snake_case slug from meaningful words in the prompt
+    const FILLER = /\b(the|a|an|please|can|you|write|make|create|build|give|me|i|want|need|fix|update|rewrite|add|new|version|of|for|with|that|this|and|or|in|to|my|code|file|script|function|class|module|using|show|get|set|just|also|now|here|it|its|is|are|was|were|be|been|being)\b/gi;
+    const slug = userText
+      .replace(FILLER, ' ')
+      .replace(/[^A-Za-z0-9\s]/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .filter(w => w.length > 1)
+      .slice(0, 5)
+      .join('_')
+      .toLowerCase() || 'code';
+
+    return slug + ext;
   }
 
   function showWelcome() {

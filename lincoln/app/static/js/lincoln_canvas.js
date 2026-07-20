@@ -46,22 +46,48 @@ const lincolnCanvas = (() => {
   }
 
 
+  // ── Resolve filename with versioning ─────────────────────────────────────
+  //
+  // Called by lincoln_chat.js before pinCodeBlock.
+  // If "ollama_service_fix.py" already exists in this session, returns
+  // "ollama_service_fix_v2.py", then "_v3", etc.
+  // On reload (loadSession) blocks are added in order so versioning rebuilds
+  // correctly from the paired user messages.
+
+  function resolveFilename(baseName, sessionId) {
+    // Strip any existing _vN suffix so we always work from the true base
+    const stripped = baseName.replace(/_v\d+(\.[^.]+)$/, '$1');
+
+    // Count how many blocks in this session share the same stripped base
+    const count = _codeBlocks.filter(b => {
+      const bStripped = b.filename.replace(/_v\d+(\.[^.]+)$/, '$1');
+      return bStripped === stripped && b.sessionId === sessionId;
+    }).length;
+
+    if (count === 0) return stripped;              // first occurrence — no suffix
+    return stripped.replace(/(\.[^.]+)$/, `_v${count + 1}$1`);
+  }
+
+
   // ── Pin a code block ──────────────────────────────────────────────────────
+  //
+  // filename is now pre-resolved (unique) from lincoln_chat.js, so we
+  // always push a new block — no dedup collision, no silent overwrites.
 
   function pinCodeBlock({ language, filename, content, projectName, sessionId, prev = null }) {
-    const existing = _codeBlocks.find(b => b.filename === filename && b.sessionId === sessionId);
-
-    if (existing) {
-      existing.prev     = existing.content;
-      existing.content  = content;
-      existing.language = language;
-    } else {
-      const id = Date.now() + Math.random().toString(36).slice(2, 6);
-      _codeBlocks.push({ id, language, filename, content, projectName, sessionId, prev });
-    }
+    const id = Date.now() + Math.random().toString(36).slice(2, 6);
+    _codeBlocks.push({ id, language, filename, content, projectName, sessionId, prev: prev ?? null });
 
     _saveToSession();
-    if (_activeTab === 'code') _renderCode();
+
+    // Always switch to Code tab so the new block is immediately visible
+    _activeTab = 'code';
+    ['tabCode', 'tabFiles', 'tabDiff'].forEach(tabId => {
+      document.getElementById(tabId)?.classList.remove('active');
+    });
+    document.getElementById('tabCode')?.classList.add('active');
+
+    _renderCode();
   }
 
 
@@ -325,6 +351,7 @@ const lincolnCanvas = (() => {
   return {
     init,
     switchTab,
+    resolveFilename,
     pinCodeBlock,
     runBlock,
     copyBlock,

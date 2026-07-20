@@ -15,6 +15,26 @@
   <!-- Syntax Highlighting (Highlight.js) -->
   <link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script>
+    // Swap hljs theme to match Lincoln's light/dark mode
+    function _syncHljsTheme(themeName) {
+      const isDark = themeName === 'dark' ||
+        (themeName === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const link = document.getElementById('hljs-theme');
+      if (!link) return;
+      const base = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/';
+      link.href = isDark ? base + 'github-dark.min.css' : base + 'github.min.css';
+    }
+    // Run once on load, then whenever the OS preference changes
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      const theme = document.documentElement.getAttribute('data-theme') || 'system';
+      _syncHljsTheme(theme);
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+      const theme = document.documentElement.getAttribute('data-theme') || 'system';
+      _syncHljsTheme(theme);
+    });
+  </script>
   <style>
     /* Styles for the new Think Mode dropdown pill */
     #thinkDropdown {
@@ -351,13 +371,15 @@
         <div style="display:flex;gap:6px">
           <input type="text" id="projSettingsPath" class="form-input"
                  style="flex:1;font-family:var(--font-mono);font-size:12px"
-                 placeholder="e.g. B:\OptionsPricing">
+                 placeholder="e.g. B:\OptionsPricing"
+                 oninput="lincolnSidebar.onPathInput('projSettingsPath','ragPathResolved')">
           <button class="panel-btn-primary" style="white-space:nowrap;flex-shrink:0"
-                  onclick="_nativeFolderPick('projSettingsPath')" title="Browse">
+                  onclick="lincolnSidebar.openFolderPicker('projSettingsPath','ragPathResolved')" title="Browse">
             <i class="ti ti-folder-open" aria-hidden="true"></i> Browse
           </button>
         </div>
-        <div class="form-hint">Lincoln will index .py, .f90, .md files from this folder into ChromaDB.</div>
+        <div id="ragPathResolved" class="form-path-resolved"></div>
+        <div class="form-hint">Lincoln will index .py, .f90, .md and other code files from this folder into ChromaDB.</div>
       </div>
 
       <!-- Code folder for Aider -->
@@ -369,12 +391,15 @@
         <div style="display:flex;gap:6px">
           <input type="text" id="projSettingsCodePath" class="form-input"
                  style="flex:1;font-family:var(--font-mono);font-size:12px"
-                 placeholder="Leave blank to use same as RAG folder">
+                 placeholder="Leave blank to use same as RAG folder"
+                 oninput="lincolnSidebar.onPathInput('projSettingsCodePath','aiderPathResolved')">
           <button class="panel-btn-primary" style="white-space:nowrap;flex-shrink:0"
-                  onclick="_nativeFolderPick('projSettingsCodePath')" title="Browse">
+                  onclick="lincolnSidebar.openFolderPicker('projSettingsCodePath','aiderPathResolved')" title="Browse">
             <i class="ti ti-folder-open" aria-hidden="true"></i> Browse
           </button>
         </div>
+        <div id="aiderPathResolved" class="form-path-resolved"></div>
+        <div class="form-hint">Aider uses this folder for code edits. Leave blank to default to the RAG folder above.</div>
       </div>
 
       <!-- Write enabled toggle -->
@@ -391,9 +416,10 @@
             Off — read only
           </button>
         </div>
-        <div style="font-size:11px;color:var(--text-danger);margin-top:8px;font-weight:500">
-          ⚠ Write access allows Aider to modify your files. Always review changes before approving.
-          Options Pricing should never have write access enabled.
+        <div id="writeAccessWarning" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--text-danger);margin-top:8px;font-weight:500">
+          <i class="ti ti-alert-triangle"></i>
+          Write access allows Aider to modify your files directly. Always review changes before approving.
+          Never enable write access on production or read-only projects (e.g. OptionsPricing).
         </div>
       </div>
 

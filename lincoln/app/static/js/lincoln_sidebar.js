@@ -256,12 +256,10 @@ const lincolnSidebar = (() => {
    */
   function _openHistorySession(sessionId) {
     switchMode('chat');
-    // Hide project home / welcome — show messages
-    const welcome  = document.getElementById('lincolnWelcome');
-    const messages = document.getElementById('chatMessages');
-    if (welcome)  welcome.style.display  = 'none';
-    if (messages) messages.style.display = 'flex';
-    // Show canvas if it was hidden for project home
+    // Remove project home screen and welcome screen if present
+    document.getElementById('projectHome')?.remove();
+    document.getElementById('lincolnWelcome')?.remove();
+    // Show canvas (was hidden on project home)
     if (typeof lincolnCanvasUI !== 'undefined') lincolnCanvasUI.show();
     setTimeout(() => lincolnChat.loadSession(sessionId), 0);
   }
