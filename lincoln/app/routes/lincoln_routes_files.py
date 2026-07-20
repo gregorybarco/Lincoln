@@ -42,7 +42,7 @@ files_blueprint = Blueprint("files", __name__)
 _UPLOAD_DIR = DB_PATH.parent / "uploads"
 
 _MAX_TEXT_BYTES = 512 * 1024   # 512 KB for plain text / code
-_MAX_DOC_BYTES  = 2 * 1024 * 1024  # 2 MB for PDF / docx / xlsx
+_MAX_DOC_BYTES  = 2 * 1024 * 1024  # 2 MB for PDF / docx / xlsx / csv
 
 # ── Extension lists ───────────────────────────────────────────────────────────
 
@@ -53,7 +53,7 @@ _TEXT_EXTENSIONS = {
     ".sql", ".c", ".cpp", ".h", ".hpp", ".rs", ".go", ".java",
     ".sh", ".bat", ".ps1", ".r",
     # Data / config
-    ".md", ".txt", ".csv", ".json", ".yaml", ".yml", ".toml",
+    ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
     ".ini", ".cfg", ".env.example",
     # LaTeX / math / Maple
     ".tex", ".latex", ".bib", ".maple", ".mw", ".mpl",
@@ -62,7 +62,8 @@ _TEXT_EXTENSIONS = {
 _DOC_EXTENSIONS = {
     ".pdf",   # text extracted via pypdf
     ".docx",  # text extracted via python-docx
-    ".xlsx",  # text extracted via openpyxl
+    ".xlsx",  # text extracted via openpyxl / pandas
+    ".csv",   # text extracted via pandas
     ".ipynb", # JSON parsed, code cells extracted
 }
 
@@ -106,25 +107,37 @@ def _extract_docx(raw: bytes) -> str:
 
 
 def _extract_xlsx(raw: bytes) -> str:
-    """Extract text from .xlsx using openpyxl."""
+    """Extract text from .xlsx using pandas."""
     try:
-        import openpyxl
-        wb     = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        import pandas as pd
+        df_dict = pd.read_excel(io.BytesIO(raw), sheet_name=None)
         sheets = []
-        for name in wb.sheetnames:
-            ws   = wb[name]
-            rows = []
-            for row in ws.iter_rows(values_only=True):
-                cells = [str(c) for c in row if c is not None]
-                if cells:
-                    rows.append("\t".join(cells))
-            if rows:
-                sheets.append(f"=== Sheet: {name} ===\n" + "\n".join(rows))
+        for name, df in df_dict.items():
+            df.dropna(how="all", inplace=True)
+            df.dropna(axis=1, how="all", inplace=True)
+            if not df.empty:
+                sheets.append(f"=== Sheet: {name} ===\n" + df.to_markdown(index=False))
         return "\n\n".join(sheets) if sheets else "(No data found in spreadsheet)"
     except ImportError:
-        return "(openpyxl not installed — run: pip install openpyxl)"
+        return "(pandas not installed — run: pip install pandas openpyxl)"
     except Exception as exc:
         return f"(XLSX text extraction failed: {exc})"
+
+
+def _extract_csv(raw: bytes) -> str:
+    """Extract text from .csv using pandas and chardet."""
+    try:
+        import pandas as pd
+        import chardet
+        enc = chardet.detect(raw)["encoding"] or "utf-8"
+        df = pd.read_csv(io.BytesIO(raw), encoding=enc)
+        df.dropna(how="all", inplace=True)
+        df.dropna(axis=1, how="all", inplace=True)
+        return df.to_markdown(index=False)
+    except ImportError:
+        return "(pandas or chardet not installed — run: pip install pandas chardet)"
+    except Exception as exc:
+        return f"(CSV text extraction failed: {exc})"
 
 
 def _extract_ipynb(raw: bytes) -> str:
@@ -213,21 +226,18 @@ def upload_file():
         text = _extract_docx(raw)
     elif suffix == ".xlsx":
         text = _extract_xlsx(raw)
+    elif suffix == ".csv":
+        text = _extract_csv(raw)
     elif suffix == ".ipynb":
         text = _extract_ipynb(raw)
     else:
-        # Plain text / code
+        # Plain text / code - Use chardet for robust multilingual encoding
+        import chardet
+        enc = chardet.detect(raw)["encoding"] or "utf-8"
         try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            # Try latin-1 as fallback (common for Fortran source)
-            try:
-                text = raw.decode("latin-1")
-            except Exception:
-                return jsonify({
-                    "status":  "error",
-                    "message": "File does not appear to be text. Binary files are not supported.",
-                }), 415
+            text = raw.decode(enc)
+        except Exception:
+            text = raw.decode("latin-1", errors="replace")
 
     # Content-addressed storage
     file_id  = hashlib.sha256(raw).hexdigest()[:16]

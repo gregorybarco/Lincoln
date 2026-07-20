@@ -16,7 +16,6 @@ from lincoln.lincoln_database import initialise_database
 
 socketio = SocketIO()
 
-
 def create_app() -> Flask:
     app = Flask(
         __name__,
@@ -33,6 +32,7 @@ def create_app() -> Flask:
     from lincoln.app.routes.lincoln_routes_settings import settings_blueprint
     from lincoln.app.routes.lincoln_routes_history  import history_blueprint
     from lincoln.app.routes.lincoln_routes_files    import files_blueprint
+    from lincoln.app.routes.lincoln_routes_jupyter  import jupyter_blueprint
 
     app.register_blueprint(chat_blueprint)
     app.register_blueprint(projects_blueprint)
@@ -40,6 +40,7 @@ def create_app() -> Flask:
     app.register_blueprint(settings_blueprint)
     app.register_blueprint(history_blueprint)
     app.register_blueprint(files_blueprint)
+    app.register_blueprint(jupyter_blueprint)
 
     @app.route("/")
     def index():

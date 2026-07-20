@@ -17,7 +17,6 @@ const lincolnSettings = (() => {
   let _settings      = {};
   let _modelDropdownOpen = false;
 
-
   // ── Initialise ────────────────────────────────────────────────────────────
 
   async function init() {
@@ -26,8 +25,14 @@ const lincolnSettings = (() => {
       loadModels(),
       checkOllamaHealth(),
     ]);
-  }
 
+    // Listen for OS theme changes when in 'system' mode to swap syntax highlighting dynamically
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if ((_settings.theme || 'system') === 'system') {
+        _applyTheme('system');
+      }
+    });
+  }
 
   // ── Settings load / save ──────────────────────────────────────────────────
 
@@ -80,6 +85,15 @@ const lincolnSettings = (() => {
 
   function _applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
+    
+    // Swap syntax highlighting theme based on active color scheme
+    const hljsLink = document.getElementById('hljs-theme');
+    if (hljsLink) {
+      const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      hljsLink.href = isDark 
+        ? 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css'
+        : 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css';
+    }
   }
 
   function _updateThemeButtons(active) {

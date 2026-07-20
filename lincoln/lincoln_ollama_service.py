@@ -8,8 +8,8 @@ Owns:
   - Streaming token-by-token responses to the Flask UI via Server-Sent Events
   - Fetching the list of available models from Ollama for the UI model selector
   - Health checking the Ollama connection
-  - Context window sizing: per-request num_ctx derived from payload size,
-    model parameter count, and available VRAM — never a fixed global cap.
+  - Context window sizing: per-request num_ctx derived dynamically from payload size
+    and the model's native context limit.
 
 Rules:
   - No route or other service calls the Ollama API directly.
@@ -18,11 +18,11 @@ Rules:
     this service never assumes a default model internally.
     The caller is responsible for resolving which model to use.
   - num_ctx is never hardcoded. resolve_num_ctx_for_request() is called
-    on every chat request and adapts to actual payload size.
+    on every chat request and adapts to actual payload size up to native limits.
 
 Used by:
-  - lincoln\app\routes\lincoln_routes_chat.py    (streaming chat responses)
-  - lincoln\app\routes\lincoln_routes_models.py  (model selector population)
+  - lincoln\\app\\routes\\lincoln_routes_chat.py    (streaming chat responses)
+  - lincoln\\app\\routes\\lincoln_routes_models.py  (model selector population)
 """
 
 import json
@@ -35,19 +35,6 @@ from lincoln.lincoln_configuration import OLLAMA_BASE_URL, OLLAMA_VRAM_GB
 
 
 # ── Thinking-mode detection ───────────────────────────────────────────────────
-#
-# Qwen3 and similar reasoning models generate a silent <think>...</think> block
-# before producing any visible output.  This can add minutes of blank-screen
-# latency for conversational queries that don't benefit from chain-of-thought.
-#
-# The `think` parameter is threaded through chat() and stream_chat() so the
-# caller controls it per-request.  The UI exposes three modes:
-#   fast   → think=False   (suppress entirely — fastest)
-#   normal → think=False   (same, default for general chat)
-#   deep   → think=True    (full reasoning — UI shows collapsible block)
-#
-# Ollama API: pass "think": <bool> as a top-level payload key (not in options).
-# Reference: https://ollama.com/blog/thinking-llms
 
 _THINKING_MODEL_PATTERNS = (
     "qwen3",
@@ -132,30 +119,6 @@ def check_ollama_health() -> dict:
 
 
 # ── Context window detection ──────────────────────────────────────────────────
-#
-# Design intent:
-#   - Maximum coverage always: num_ctx is set per-request to exactly what the
-#     payload needs, never a fixed global cap.
-#   - VRAM-safe always: the ceiling is derived from available VRAM minus model
-#     weight footprint, so we never allocate KV cache that doesn't fit.
-#   - Warn loudly: if a payload would exceed the hardware ceiling, Lincoln logs
-#     a clear warning with token counts before sending — no silent truncation.
-#   - Zero user input: everything is derived from Ollama /api/show + VRAM config.
-#
-# KV cache cost model (conservative estimates per token, all layers, K+V):
-#   ~7B  param model @ Q4  → ~0.50 MB/token
-#   ~9B  param model @ Q4  → ~0.55 MB/token
-#   ~12B param model @ Q4  → ~0.70 MB/token
-#   ~27B param model @ Q4  → ~1.20 MB/token
-#
-# Weight footprint estimates (Q4):
-#   ~7B  → ~4.5 GB
-#   ~9B  → ~5.5 GB
-#   ~12B → ~7.5 GB
-#   ~27B → ~15.0 GB
-#
-# Formula: max_tokens = (VRAM_GB - weight_gb) * 1024 / mb_per_token
-# We apply a 15% safety margin on top of that.
 
 _ctx_cache:    dict[str, int] = {}  # model → hardware ceiling (cached per process)
 _native_cache: dict[str, int] = {}  # model → model's own native context limit
@@ -186,10 +149,8 @@ def _parse_native_ctx(info: dict) -> int:
       1. modelfile PARAMETER block  — "PARAMETER num_ctx <value>"
       2. model_info dict            — any key containing "context_length" (Ollama ≥0.3)
 
-    Returns 32768 if neither source has it — conservative high value so we
-    don't accidentally under-allocate on a capable model.
+    Returns 131072 (128k) if neither source has it as a generous modern default.
     """
-    # Primary: modelfile parameter block
     modelfile = info.get("modelfile", "")
     for line in modelfile.splitlines():
         parts = line.strip().split()
@@ -199,108 +160,17 @@ def _parse_native_ctx(info: dict) -> int:
             except ValueError:
                 pass
 
-    # Secondary: model_info dict (Ollama ≥0.3)
     model_info = info.get("model_info", {})
     for key, val in model_info.items():
         if "context_length" in key and isinstance(val, int):
             return val
 
-    return 32768  # unknown → assume large, let VRAM cap do the limiting
-
-
-def _parse_param_count(info: dict) -> float:
-    """
-    Extract approximate parameter count (in billions) from /api/show response.
-
-    Checks:
-      1. model_info keys containing 'parameter_count' (exact, in raw count)
-      2. details.parameter_size string e.g. '9.4B', '12B', '7B'
-      3. model name string — parse the number before 'b' (e.g. 'qwen3.5:9b' → 9.0)
-
-    Returns 9.0 as fallback — safe middle ground for typical models.
-    """
-    # Option 1: model_info exact count
-    model_info = info.get("model_info", {})
-    for key, val in model_info.items():
-        if "parameter_count" in key and isinstance(val, (int, float)):
-            return val / 1e9
-
-    # Option 2: details.parameter_size string
-    details = info.get("details", {})
-    param_size = details.get("parameter_size", "")
-    if param_size:
-        # e.g. "9.4B", "12B", "7B", "27.2B"
-        clean = param_size.upper().replace("B", "").strip()
-        try:
-            return float(clean)
-        except ValueError:
-            pass
-
-    # Option 3: parse model name — "qwen3.5:9b" → 9.0, "gemma4:12b" → 12.0
-    model_lower = info.get("model", "").lower()
-    match = re.search(r":(\d+(?:\.\d+)?)b", model_lower)
-    if match:
-        try:
-            return float(match.group(1))
-        except ValueError:
-            pass
-
-    return 9.0  # safe fallback
-
-
-def _compute_vram_ceiling(param_billions: float, vram_gb: float) -> int:
-    """
-    Derive the maximum safe num_ctx from available VRAM and model size.
-
-    Formula:
-      weight_gb      = estimated model weight footprint at Q4
-      available_gb   = vram_gb - weight_gb
-      mb_per_token   = estimated KV cache cost per token at Q4
-      raw_max        = (available_gb * 1024) / mb_per_token
-      safe_max       = raw_max * 0.85  (15% safety margin)
-
-    Returns the result rounded down to the nearest power of two,
-    clamped to a minimum of 2048.
-    """
-    # Weight footprint at Q4 (GB) — conservative estimates
-    if param_billions <= 7.5:
-        weight_gb    = 4.5
-        mb_per_token = 0.50
-    elif param_billions <= 10.0:
-        weight_gb    = 5.5
-        mb_per_token = 0.55
-    elif param_billions <= 14.0:
-        weight_gb    = 7.5
-        mb_per_token = 0.70
-    elif param_billions <= 30.0:
-        weight_gb    = 15.0
-        mb_per_token = 1.20
-    else:
-        # Very large model — most VRAM goes to weights
-        weight_gb    = vram_gb * 0.90
-        mb_per_token = 1.60
-
-    available_gb = max(vram_gb - weight_gb, 0)
-    raw_max      = (available_gb * 1024) / mb_per_token
-    safe_max     = int(raw_max * 0.85)
-
-    # Round down to power of two (Ollama allocates in these increments)
-    power = 2048
-    while power * 2 <= safe_max:
-        power *= 2
-
-    return max(power, 2048)
+    return 131072  # Assume large 128k limit for modern models
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
     """
     Estimate the token count of a message list before sending to Ollama.
-
-    Rule of thumb: 1 token ≈ 4 characters (conservative for mixed English + code).
-    Add 10% overhead for Ollama's internal message formatting (role headers, etc.).
-
-    This is an estimate, not a guarantee — real tokenisation is model-specific.
-    It is always used as a lower bound; we never assume the real count is smaller.
     """
     total_chars = sum(len(m.get("content", "")) for m in messages)
     return int((total_chars / 4) * 1.10)
@@ -308,29 +178,24 @@ def _estimate_tokens(messages: list[dict]) -> int:
 
 def resolve_hardware_ceiling(model: str) -> int:
     """
-    Return the hardware-derived maximum num_ctx for this model on this machine.
+    Return the maximum native num_ctx for this model.
     Result is cached per process — /api/show is only called once per model.
-
-    This is the absolute ceiling. Individual requests may use less (see
-    resolve_num_ctx_for_request), but never more than this value.
     """
     if model in _ctx_cache:
         return _ctx_cache[model]
 
     info           = _fetch_model_info(model)
     native_ctx     = _parse_native_ctx(info)
-    param_billions = _parse_param_count(info)
-    vram_ceiling   = _compute_vram_ceiling(param_billions, OLLAMA_VRAM_GB)
-    hardware_max   = min(native_ctx, vram_ceiling)
+
+    # Trust the model's native capabilities and let Ollama handle VRAM offloading dynamically
+    hardware_max   = native_ctx
 
     _ctx_cache[model]    = hardware_max
     _native_cache[model] = native_ctx
 
     print(
         f"[Lincoln] ctx ceiling — model={model} "
-        f"params={param_billions:.1f}B "
         f"native={native_ctx} "
-        f"vram_ceiling={vram_ceiling} "
         f"→ hardware_max={hardware_max}"
     )
     return hardware_max
@@ -339,38 +204,21 @@ def resolve_hardware_ceiling(model: str) -> int:
 def resolve_num_ctx_for_request(model: str, messages: list[dict]) -> int:
     """
     Return the num_ctx to use for this specific request.
-
-    Pipeline:
-      1. Resolve hardware ceiling for this model (cached after first call).
-      2. Estimate token count of the actual payload.
-      3. Round up to next power of two above the estimate — allocate exactly
-         what is needed, no more, no less.
-      4. If the estimate exceeds the hardware ceiling:
-           - Log a WARNING with exact counts so the problem is visible.
-           - Clamp to hardware ceiling and send anyway — Ollama will truncate
-             the oldest history, which is less bad than refusing to respond.
-      5. Return the resolved value.
-
-    This is called on every request — the per-request cost is one token
-    estimate (pure Python string ops, <1ms) plus a dict lookup for the ceiling.
-    The /api/show call only happens once per model per process lifetime.
     """
-    hardware_max    = resolve_hardware_ceiling(model)
+    hardware_max     = resolve_hardware_ceiling(model)
     estimated_tokens = _estimate_tokens(messages)
 
     if estimated_tokens > hardware_max:
         print(
-            f"[Lincoln] WARNING: payload too large for hardware — "
+            f"[Lincoln] WARNING: payload exceeds model's native context — "
             f"estimated={estimated_tokens} tokens "
-            f"hardware_max={hardware_max} tokens "
-            f"model={model} "
-            f"VRAM={OLLAMA_VRAM_GB}GB — "
-            f"oldest history will be truncated by Ollama. "
-            f"Consider starting a new session or reducing pasted content."
+            f"model_max={hardware_max} tokens "
+            f"model={model}. "
+            f"Oldest history will be truncated by Ollama."
         )
         return hardware_max
 
-    # Round up to next power of two — never allocate less than needed
+    # Round up to next power of two
     window = 2048
     while window < estimated_tokens:
         window *= 2
@@ -394,24 +242,6 @@ def chat(
 ) -> str:
     """
     Send a conversation to Ollama and return the complete response text.
-    Use stream_chat() instead when streaming to the UI.
-
-    Args:
-        messages    : List of message dicts with 'role' and 'content' keys
-                      e.g. [{"role": "user", "content": "explain Black-Scholes"}]
-        model       : Ollama model name (e.g. 'qwen3.5:9b', 'gemma4:12b')
-        temperature : Sampling temperature (default 0.7)
-        timeout     : Request timeout in seconds (default 180)
-        think       : Enable chain-of-thought reasoning (default False).
-                      Only meaningful for thinking-capable models (Qwen3, QwQ, etc.).
-                      When False, suppresses the silent <think> block entirely.
-
-    Returns:
-        Complete response text as a string.
-
-    Raises:
-        requests.RequestException on network failure.
-        ValueError if Ollama returns an unexpected response format.
     """
     payload = {
         "model":    model,
@@ -422,8 +252,7 @@ def chat(
             "num_ctx":     resolve_num_ctx_for_request(model, messages),
         },
     }
-    # Suppress thinking for thinking-capable models unless explicitly enabled.
-    # Non-thinking models ignore this key harmlessly.
+    
     if _is_thinking_model(model):
         payload["think"] = think
         print(f"[Lincoln] thinking={'on' if think else 'off'} for {model}")
@@ -458,31 +287,6 @@ def stream_chat(
 ) -> Generator[str, None, None]:
     """
     Stream a conversation response from Ollama token by token.
-    Used by lincoln_routes_chat.py to stream responses to the UI via SSE.
-
-    Args:
-        messages    : List of message dicts with 'role' and 'content' keys
-        model       : Ollama model name
-        temperature : Sampling temperature (default 0.7)
-        timeout     : Request timeout in seconds (default 180)
-        think       : Enable chain-of-thought reasoning (default False).
-                      When True, Ollama streams <think> tokens separately via
-                      the `thinking` field on each chunk.  This generator yields
-                      those tokens wrapped in SSE-style markers so the UI can
-                      route them to a collapsible reasoning block:
-                        "THINK_START"  — open the reasoning block
-                        token          — each thinking token (raw text)
-                        "THINK_END"    — close the reasoning block
-                      After THINK_END, normal response tokens follow.
-                      When False (default), thinking is suppressed entirely —
-                      no <think> block, no latency, first token appears fast.
-
-    Yields:
-        Individual text tokens as they arrive from Ollama.
-        When think=True, also yields THINK_START / THINK_END markers.
-
-    Raises:
-        requests.RequestException on network failure.
     """
     payload = {
         "model":    model,
@@ -493,7 +297,7 @@ def stream_chat(
             "num_ctx":     resolve_num_ctx_for_request(model, messages),
         },
     }
-    # Suppress thinking for thinking-capable models unless explicitly enabled.
+    
     if _is_thinking_model(model):
         payload["think"] = think
         print(f"[Lincoln] thinking={'on' if think else 'off'} for {model}")
@@ -514,8 +318,6 @@ def stream_chat(
             try:
                 chunk = json.loads(line.decode("utf-8"))
 
-                # When think=True, Ollama puts reasoning tokens in chunk["thinking"]
-                # and normal tokens in chunk["message"]["content"] as usual.
                 if think:
                     thinking_token = chunk.get("thinking", "")
                     if thinking_token:
@@ -531,7 +333,6 @@ def stream_chat(
                             yield "THINK_END"
                         yield response_token
                 else:
-                    # think=False: only normal response tokens, no thinking overhead
                     token = chunk.get("message", {}).get("content", "")
                     if token:
                         yield token
@@ -556,15 +357,6 @@ def build_messages_with_rag_context(
     """
     Build a full message list for Ollama combining session history,
     RAG-retrieved context, and the current user question.
-
-    Args:
-        user_question   : The current question from the user
-        rag_context     : Retrieved chunks from lincoln_rag_index_service
-        session_history : Previous messages in this session (role + content dicts)
-        project_name    : Display name of the active project (for system prompt)
-
-    Returns:
-        List of message dicts ready to pass to chat() or stream_chat()
     """
     system_content = (
         f"You are Lincoln, a local AI assistant. "

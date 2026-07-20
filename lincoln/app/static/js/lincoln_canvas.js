@@ -8,6 +8,7 @@
  *   - Tab switching: Code / Files / Diff
  *   - Copy / save / delete actions per block
  *   - Session persistence via sessionStorage
+ *   - NEW: Run Python blocks via Jupyter Sandbox
  */
 
 const lincolnCanvas = (() => {
@@ -89,6 +90,10 @@ const lincolnCanvas = (() => {
             ${block.projectName ? `<span style="color:var(--text-muted)"> · ${_esc(block.projectName)}</span>` : ''}
           </span>
           <div class="canvas-code-actions">
+            <!-- NEW EXECUTE IN JUPYTER BUTTON -->
+            <button id="run-btn-${idx}" class="canvas-code-action-btn" onclick="lincolnCanvas.runBlock(${idx})" title="Run in Sandbox" style="color:var(--text-success)">
+              <i class="ti ti-player-play"></i>
+            </button>
             <button class="canvas-code-action-btn" onclick="lincolnCanvas.copyBlock(${idx})" title="Copy">
               <i class="ti ti-copy"></i>
             </button>
@@ -104,6 +109,7 @@ const lincolnCanvas = (() => {
         <div class="canvas-code-content">
           <pre><code class="${_hlClass(block.language)}">${_highlighted(block.content, block.language)}</code></pre>
         </div>
+        ${block.output ? block.output : ''}
       </div>
     `).join('');
   }
@@ -201,12 +207,44 @@ const lincolnCanvas = (() => {
 
   // ── Block actions ─────────────────────────────────────────────────────────
 
+  async function runBlock(idx) {
+    const block = _codeBlocks[idx];
+    if (!block || !block.content) return;
+    
+    const btn = document.getElementById(`run-btn-${idx}`);
+    if (btn) btn.innerHTML = '<i class="ti ti-loader ti-spin"></i>';
+    
+    try {
+      const res = await fetch('/api/jupyter/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: block.content, language: block.language })
+      });
+      const data = await res.json();
+      
+      let outHtml = '';
+      if (!res.ok) {
+        outHtml = `<div style="color:var(--text-danger);margin-top:8px;font-family:var(--font-mono);font-size:11px;background:var(--danger-bg);border-top:0.5px solid var(--border);padding:8px;white-space:pre-wrap;max-height:200px;overflow-y:auto;">Error:\n${_esc(data.error)}</div>`;
+      } else {
+        outHtml = `<div style="color:var(--text-primary);margin-top:8px;font-family:var(--font-mono);font-size:11px;background:var(--bg-page);border-top:1px solid var(--border);padding:8px;white-space:pre-wrap;max-height:200px;overflow-y:auto;">Out[${idx+1}]:\n${_esc(data.result)}</div>`;
+      }
+      
+      block.output = outHtml;
+      _saveToSession();
+      if (_activeTab === 'code') _renderCode();
+      
+    } catch (err) {
+      alert('Execution failed: ' + err.message);
+      if (btn) btn.innerHTML = '<i class="ti ti-player-play"></i>';
+    }
+  }
+
   async function copyBlock(idx) {
     const block = _codeBlocks[idx];
     if (!block) return;
     try {
       await navigator.clipboard.writeText(block.content);
-      const btn = document.querySelectorAll('.canvas-code-action-btn')[idx * 3];
+      const btn = document.querySelectorAll('.canvas-code-action-btn')[idx * 4 + 1]; // Offset due to Run button
       if (btn) {
         const orig = btn.innerHTML;
         btn.innerHTML = '<i class="ti ti-check"></i>';
@@ -288,6 +326,7 @@ const lincolnCanvas = (() => {
     init,
     switchTab,
     pinCodeBlock,
+    runBlock,
     copyBlock,
     saveBlock,
     deleteBlock,

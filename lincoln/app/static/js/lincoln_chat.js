@@ -1,15 +1,11 @@
 /**
- * Lincoln Chat  v0.5.1
+ * Lincoln Chat  v0.5.2
  * =====================
- * Changes from v0.4.1:
- *   - Thinking mode toggle: Fast / Normal / Deep (like Claude's Low/Medium/Max/Thinking)
- *     Fast   → think=false, immediate first token
- *     Normal → think=false, default (same speed, labelled clearly)
- *     Deep   → think=true, streams reasoning into collapsible block before answer
- *   - Fix: <think> tokens no longer corrupt the response bubble.
- *     THINK_START / THINK_END markers from backend route thinking tokens to a
- *     separate collapsible <details> block — response text is always clean.
- *   - think_mode sent with every /api/chat/send request
+ * Changes from v0.5.1:
+ *   - Changed thinking mode from a cycle toggle to a dropdown pill
+ *     for better visibility of all options (Fast, Normal, Deep).
+ *   - Mathematical LaTeX rendering using KaTeX
+ *   - Syntax highlighting using highlight.js
  */
 
 const lincolnChat = (() => {
@@ -18,49 +14,57 @@ const lincolnChat = (() => {
   let _activeProjectId = null;
   let _activeProject   = null;
   let _isStreaming     = false;
-  let _pendingFileId   = null;   // file_id from /api/files/upload
+  let _pendingFileId   = null;
   let _pendingFileName = null;
+  let _thinkDropdownOpen = false;
 
-  // ── Thinking mode ─────────────────────────────────────────────────────────
-  // Cycles: fast → normal → deep → fast
-  // fast/normal both suppress thinking (think=false); deep enables it (think=true).
   const _THINK_MODES = ['fast', 'normal', 'deep'];
   const _THINK_LABELS = {
     fast:   { label: '⚡ Fast',   title: 'Fast — no reasoning, immediate response' },
     normal: { label: '◎ Normal', title: 'Normal — balanced, no reasoning overhead' },
     deep:   { label: '🧠 Deep',  title: 'Deep — full chain-of-thought reasoning (slower)' },
   };
-  let _thinkMode = 'normal';   // default
+  let _thinkMode = 'normal';
 
-  function cycleThinkMode() {
-    const idx   = _THINK_MODES.indexOf(_thinkMode);
-    _thinkMode  = _THINK_MODES[(idx + 1) % _THINK_MODES.length];
+  function toggleThinkDropdown() {
+    const dropdown = document.getElementById('thinkDropdown');
+    if (!dropdown) return;
+    _thinkDropdownOpen = !_thinkDropdownOpen;
+    dropdown.classList.toggle('open', _thinkDropdownOpen);
+  }
+
+  function closeThinkDropdown() {
+    _thinkDropdownOpen = false;
+    document.getElementById('thinkDropdown')?.classList.remove('open');
+  }
+
+  function setThinkMode(mode) {
+    _thinkMode = mode;
     _updateThinkButton();
+    closeThinkDropdown();
   }
 
   function _updateThinkButton() {
-    const btn = document.getElementById('thinkModeBtn');
-    if (!btn) return;
-    const meta     = _THINK_LABELS[_thinkMode];
-    btn.textContent = meta.label;
-    btn.title       = meta.title;
-    btn.dataset.mode = _thinkMode;
-    // Visual accent for deep mode
-    btn.classList.toggle('think-mode-deep', _thinkMode === 'deep');
+    const label = document.getElementById('thinkModeLabel');
+    const pill  = document.getElementById('thinkModePill');
+    if (!label || !pill) return;
+
+    const meta = _THINK_LABELS[_thinkMode];
+    label.textContent = meta.label;
+    pill.title        = meta.title;
+
+    pill.classList.toggle('think-mode-deep', _thinkMode === 'deep');
+
+    // Update dropdown selection
+    document.querySelectorAll('#thinkDropdown .model-dropdown-item').forEach(el => {
+      el.classList.toggle('selected', el.dataset.mode === _thinkMode);
+    });
   }
-
-
-  // ── Init ──────────────────────────────────────────────────────────────────
-  // DO NOT create a session here — only load context strip.
-  // Session is created lazily on first message send.
 
   async function init() {
     await _loadContextStrip();
-    _updateThinkButton();   // set initial label on the think toggle button
+    _updateThinkButton();
   }
-
-
-  // ── Session management ────────────────────────────────────────────────────
 
   async function _ensureSession() {
     if (_sessionId) return;
@@ -72,7 +76,6 @@ const lincolnChat = (() => {
       });
       const session = await res.json();
       _sessionId    = session.id;
-      // Refresh history immediately so the new chat appears in the sidebar
       if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadHistory();
     } catch (err) {
       console.error('Failed to create session:', err);
@@ -80,7 +83,6 @@ const lincolnChat = (() => {
   }
 
   async function newSession() {
-    // Show home screen — session created lazily on first message
     _sessionId = null;
     _clearMessages();
     _clearPendingFile();
@@ -95,7 +97,6 @@ const lincolnChat = (() => {
       _clearMessages();
       _hideWelcome();
       _clearPendingFile();
-      // Clear canvas then restore only THIS session's code blocks
       if (typeof lincolnCanvas !== 'undefined') lincolnCanvas.clear();
 
       messages.forEach(msg => {
@@ -103,7 +104,6 @@ const lincolnChat = (() => {
           _appendUserMessage(msg.content);
         } else if (msg.role === 'assistant') {
           _appendAssistantMessage(msg.content, []);
-          // Re-pin code blocks to canvas on restore
           if (typeof lincolnCanvas !== 'undefined') {
             const blocks = lincolnCanvas.extractCodeBlocks(msg.content);
             blocks.forEach(block => lincolnCanvas.pinCodeBlock({
@@ -126,16 +126,12 @@ const lincolnChat = (() => {
     _activeProject   = project;
   }
 
-
-  // ── Send message ──────────────────────────────────────────────────────────
-
   async function sendMessage() {
     const input = document.getElementById('chatInput');
     if (!input) return;
     const text = input.value.trim();
     if (!text || _isStreaming) return;
 
-    // Lazily create session on first message
     await _ensureSession();
 
     if (text.startsWith('search ')) return _handleWebSearch(text.slice(7).trim(), input);
@@ -145,16 +141,11 @@ const lincolnChat = (() => {
     autoResizeTextarea(input);
     _hideWelcome();
 
-    // Show user message — include file chip if pending
-    const displayText = _pendingFileName
-      ? `📎 ${_pendingFileName}\n\n${text}`
-      : text;
+    const displayText = _pendingFileName ? `📎 ${_pendingFileName}\n\n${text}` : text;
     _appendUserMessage(displayText);
 
-    const fileId       = _pendingFileId;
-    const pendingName  = _pendingFileName;
+    const fileId = _pendingFileId;
     _clearPendingFile();
-
     _setStreaming(true);
 
     const assistantEl  = _appendAssistantMessage('', []);
@@ -163,12 +154,10 @@ const lincolnChat = (() => {
     cursor.className   = 'streaming-cursor';
     bubbleEl.appendChild(cursor);
 
-    // Thinking block — created on demand when THINK_START arrives
-    let thinkEl        = null;   // <details> element
-    let thinkBodyEl    = null;   // <div> inside it receiving reasoning tokens
+    let thinkEl        = null;
+    let thinkBodyEl    = null;
     let inThinkBlock   = false;
     let thinkText      = '';
-
     let fullText = '';
     let sources  = [];
 
@@ -180,7 +169,6 @@ const lincolnChat = (() => {
       thinkBodyEl = document.createElement('div');
       thinkBodyEl.className = 'think-body';
       thinkEl.appendChild(thinkBodyEl);
-      // Insert before the bubble so it appears above the answer
       bubbleEl.parentNode.insertBefore(thinkEl, bubbleEl);
     }
 
@@ -216,21 +204,13 @@ const lincolnChat = (() => {
           try {
             const event = JSON.parse(line.slice(6));
 
-            // ── think_mode handshake ──────────────────────────────────────
-            if (event.type === 'think_mode') {
-              // acknowledged — no UI action needed
-            }
-
-            // ── token ─────────────────────────────────────────────────────
             if (event.type === 'token') {
               const content = event.content;
-
               if (content === 'THINK_START') {
                 inThinkBlock = true;
                 _ensureThinkBlock();
               } else if (content === 'THINK_END') {
                 inThinkBlock = false;
-                // Replace spinner with token count
                 if (thinkEl) {
                   const words = thinkText.trim().split(/\s+/).length;
                   thinkEl.querySelector('summary').innerHTML =
@@ -243,7 +223,6 @@ const lincolnChat = (() => {
                   _scrollToBottom();
                 }
               } else {
-                // Normal response token — this is the text that shows in the bubble
                 fullText += content;
                 bubbleEl.textContent = fullText;
                 bubbleEl.appendChild(cursor);
@@ -251,12 +230,10 @@ const lincolnChat = (() => {
               }
             }
 
-            // ── sources ───────────────────────────────────────────────────
             if (event.type === 'sources') {
               sources = event.sources || [];
             }
 
-            // ── done ──────────────────────────────────────────────────────
             if (event.type === 'done') {
               cursor.remove();
               _renderFinalMessage(bubbleEl, fullText, sources, assistantEl);
@@ -272,21 +249,17 @@ const lincolnChat = (() => {
                   sessionId:   _sessionId,
                 }));
               }
-
               if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadHistory();
             }
 
-            // ── error ─────────────────────────────────────────────────────
             if (event.type === 'error') {
               cursor.remove();
               bubbleEl.textContent = `Error: ${event.message}`;
               bubbleEl.style.color = 'var(--text-danger)';
             }
-
-          } catch (_) { /* partial JSON — buffer fills on next iteration */ }
+          } catch (_) { }
         }
       }
-
     } catch (err) {
       cursor.remove();
       bubbleEl.textContent = `Connection error: ${err.message}`;
@@ -295,9 +268,6 @@ const lincolnChat = (() => {
 
     _setStreaming(false);
   }
-
-
-  // ── Web search / fetch commands ───────────────────────────────────────────
 
   async function _handleWebSearch(query, input) {
     input.value = '';
@@ -336,17 +306,12 @@ const lincolnChat = (() => {
     );
   }
 
-
-  // ── File attachment ───────────────────────────────────────────────────────
-
   function openFileAttach() {
-    // Open file browser in file mode
     if (typeof lincolnSidebar !== 'undefined') {
       lincolnSidebar.openFileBrowser('file', async (selectedPath) => {
         await _uploadFileByPath(selectedPath);
       });
     } else {
-      // Fallback: native file input
       const input = document.createElement('input');
       input.type   = 'file';
       input.accept = '.py,.f90,.f95,.f03,.f08,.js,.ts,.css,.html,.sql,.md,.txt,.csv,.json,.yaml,.yml,.toml,.ini,.cfg,.c,.cpp,.h,.hpp,.sh,.bat';
@@ -358,10 +323,6 @@ const lincolnChat = (() => {
   }
 
   async function _uploadFileByPath(filePath) {
-    // Server-side: read file from path (file browser selected a local path)
-    // We fetch the file content from /api/files/browse?path=... won't work for binary
-    // Instead use a dedicated endpoint or fall back to native input
-    // For now: open native input pre-seeded with the path hint
     const input = document.createElement('input');
     input.type  = 'file';
     input.onchange = async () => {
@@ -423,9 +384,6 @@ const lincolnChat = (() => {
     document.getElementById('pendingFileChip')?.remove();
   }
 
-
-  // ── Context strip ─────────────────────────────────────────────────────────
-
   async function _loadContextStrip() {
     try {
       const res     = await fetch('/api/history/context');
@@ -439,7 +397,7 @@ const lincolnChat = (() => {
 
       content.innerHTML = `<strong>Last session</strong> — ${_esc(latest.content)}`;
       strip.style.display = 'flex';
-    } catch (_) { /* no memory yet */ }
+    } catch (_) { }
   }
 
   function dismissContextStrip() {
@@ -470,24 +428,36 @@ const lincolnChat = (() => {
     }
   }
 
-
-  // ── Markdown rendering ────────────────────────────────────────────────────
-  // Uses marked.js (loaded via CDN) for full markdown support.
-  // Falls back to plain text if marked is not available.
-
   function _md(text) {
     if (typeof marked !== 'undefined') {
       return marked.parse(text || '', { breaks: true, gfm: true });
     }
-    // Fallback — basic inline formatting only
     return _esc(text)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/\n/g, '<br>');
   }
 
-
-  // ── Message rendering ─────────────────────────────────────────────────────
+  function _applyFormatting(element) {
+    if (!element) return;
+    if (typeof hljs !== 'undefined') {
+      element.querySelectorAll('pre code').forEach((block) => {
+        hljs.highlightElement(block);
+      });
+    }
+    if (typeof renderMathInElement !== 'undefined') {
+      renderMathInElement(element, {
+        delimiters: [
+          {left: '$$', right: '$$', display: true},
+          {left: '\\[', right: '\\]', display: true},
+          {left: '$', right: '$', display: false},
+          {left: '\\(', right: '\\)', display: false}
+        ],
+        throwOnError: false,
+        output: 'html'
+      });
+    }
+  }
 
   function _appendUserMessage(text) {
     const container = document.getElementById('chatMessages');
@@ -501,6 +471,7 @@ const lincolnChat = (() => {
       </div>
     `;
     container.appendChild(el);
+    _applyFormatting(el.querySelector('.message-bubble'));
     _scrollToBottom();
     return el;
   }
@@ -518,14 +489,15 @@ const lincolnChat = (() => {
       </div>
     `;
     container.appendChild(el);
+    _applyFormatting(el.querySelector('.message-bubble'));
     _scrollToBottom();
     if (sources?.length) _renderSources(el.querySelector('.message-sources'), sources);
     return el;
   }
 
   function _renderFinalMessage(bubbleEl, text, sources, messageEl) {
-    // Apply full markdown rendering when streaming completes
     bubbleEl.innerHTML = _md(text);
+    _applyFormatting(bubbleEl);
     const sourcesEl = messageEl.querySelector('.message-sources');
     if (sourcesEl && sources?.length) _renderSources(sourcesEl, sources);
   }
@@ -539,9 +511,6 @@ const lincolnChat = (() => {
       </div>
     `).join('');
   }
-
-
-  // ── Input helpers ─────────────────────────────────────────────────────────
 
   function handleInputKeydown(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -559,15 +528,11 @@ const lincolnChat = (() => {
     input.focus();
   }
 
-
-  // ── Utilities ─────────────────────────────────────────────────────────────
-
   function _clearMessages() {
     const container = document.getElementById('chatMessages');
     if (!container) return;
 
     if (_activeProject) {
-      // Claude-style project home screen
       container.innerHTML = `
         <div class="lincoln-project-home" id="projectHome">
           <div class="project-home-header">
@@ -622,7 +587,6 @@ const lincolnChat = (() => {
   }
 
   function startNewChat() {
-    // Hide home screen, show empty chat, create session on first send
     const home = document.getElementById('projectHome');
     if (home) home.remove();
     _sessionId = null;
@@ -670,25 +634,25 @@ const lincolnChat = (() => {
     return `code${ext[language] || '.txt'}`;
   }
 
-
-  // ── Public screen-state methods (called by lincolnSidebar) ───────────────
-  // These MUST stay in sync with what lincoln_sidebar.js calls on lincolnChat.
-
   function showWelcome() {
-    // Called by sidebar when user selects "General" (no project)
     _sessionId = null;
-    _clearMessages();   // renders lincolnWelcome screen
+    _clearMessages();
   }
 
   function showProjectHome(project) {
-    // Called by sidebar when user selects a project
     _sessionId      = null;
     _activeProject  = project;
-    _clearMessages();   // renders project home screen
+    _clearMessages();
   }
 
-
-  // ── Public API ────────────────────────────────────────────────────────────
+  // Close think dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    const pill = document.getElementById('thinkModePill');
+    const dd   = document.getElementById('thinkDropdown');
+    if (pill && dd && !pill.contains(e.target) && !dd.contains(e.target)) {
+      closeThinkDropdown();
+    }
+  });
 
   return {
     init,
@@ -704,7 +668,9 @@ const lincolnChat = (() => {
     clearPendingFile,
     dismissContextStrip,
     saveMemory,
-    cycleThinkMode,
+    toggleThinkDropdown,
+    closeThinkDropdown,
+    setThinkMode,
     showWelcome,
     showProjectHome,
   };

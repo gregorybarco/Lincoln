@@ -7,6 +7,26 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/lincoln_main.css') }}">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
   <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+  <!-- Math Rendering (KaTeX) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+  
+  <!-- Syntax Highlighting (Highlight.js) -->
+  <link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <style>
+    /* Styles for the new Think Mode dropdown pill */
+    #thinkDropdown {
+      left: 190px; /* Offset to clear the model selector dropdown */
+      min-width: 220px;
+    }
+    .input-model-pill.think-mode-deep {
+      border-color: var(--text-accent);
+      color: var(--text-accent);
+      background: color-mix(in srgb, var(--text-accent) 8%, transparent);
+    }
+  </style>
 </head>
 <body>
 
@@ -157,10 +177,13 @@
                   <span id="activeModelLabel">qwen3.5:9b</span>
                   <i class="ti ti-chevron-down" aria-hidden="true"></i>
                 </div>
-                <button class="think-mode-btn" id="thinkModeBtn"
-                        onclick="lincolnChat.cycleThinkMode()"
-                        title="Normal — balanced, no reasoning overhead"
-                        data-mode="normal">◎ Normal</button>
+                
+                <!-- NEW THINK MODE PILL DROPDOWN -->
+                <div class="input-model-pill" id="thinkModePill" onclick="lincolnChat.toggleThinkDropdown()" title="Normal — balanced, no reasoning overhead">
+                  <span id="thinkModeLabel">◎ Normal</span>
+                  <i class="ti ti-chevron-down" aria-hidden="true"></i>
+                </div>
+
                 <div class="input-cmd-hints">
                   <button class="cmd-hint" onclick="lincolnChat.insertCommand('search ')">search …</button>
                   <button class="cmd-hint" onclick="lincolnChat.insertCommand('fetch ')">fetch url</button>
@@ -168,9 +191,24 @@
                 </div>
               </div>
             </div>
+            
             <div class="lincoln-model-dropdown" id="modelDropdown">
               <!-- Populated by lincoln_settings.js -->
             </div>
+
+            <!-- NEW THINK MODE DROPDOWN CONTAINER -->
+            <div class="lincoln-model-dropdown" id="thinkDropdown">
+              <div class="model-dropdown-item" data-mode="fast" onclick="lincolnChat.setThinkMode('fast')">
+                <span>⚡ Fast <span style="font-size:10px;color:var(--text-muted);display:block;margin-top:2px">No reasoning, immediate</span></span>
+              </div>
+              <div class="model-dropdown-item selected" data-mode="normal" onclick="lincolnChat.setThinkMode('normal')">
+                <span>◎ Normal <span style="font-size:10px;color:var(--text-muted);display:block;margin-top:2px">Balanced, no overhead</span></span>
+              </div>
+              <div class="model-dropdown-item" data-mode="deep" onclick="lincolnChat.setThinkMode('deep')">
+                <span>🧠 Deep <span style="font-size:10px;color:var(--text-muted);display:block;margin-top:2px">Full chain-of-thought</span></span>
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -524,8 +562,6 @@
 <script src="{{ url_for('static', filename='js/lincoln_chat.js') }}"></script>
 <script>
   // ── Native Windows folder picker ─────────────────────────────────────────
-  // Opens the OS-native file dialog. On Windows/Chrome this is the real
-  // Windows Explorer folder picker — no fake modal needed.
   function _nativeFolderPick(targetInputId) {
     const picker = document.createElement('input');
     picker.type  = 'file';
@@ -535,13 +571,10 @@
     document.body.appendChild(picker);
     picker.addEventListener('change', () => {
       if (picker.files && picker.files.length > 0) {
-        // webkitRelativePath = 'FolderName/file.ext'
-        // We want the folder name hint — user can edit the full path manually
         const rel    = picker.files[0].webkitRelativePath || '';
         const folder = rel.split('/')[0] || '';
         const input  = document.getElementById(targetInputId);
         if (input && folder) {
-          // Show folder name as hint — user pastes full absolute path
           input.placeholder = folder + ' (paste full path: e.g. B:\\' + folder + ')';
           input.focus();
         }
@@ -554,7 +587,7 @@
   // ── Canvas collapse + drag resize ────────────────────────────────────────
   const lincolnCanvasUI = (() => {
     let _collapsed    = false;
-    let _savedWidth   = 320;   // remembers last width across toggles
+    let _savedWidth   = 320;
 
     function toggle() {
       _collapsed = !_collapsed;
@@ -578,9 +611,6 @@
       }
     }
 
-    // ── Drag-to-resize handle ─────────────────────────────────────────────
-    // A thin invisible strip on the LEFT edge of the canvas column.
-    // Mousedown on it starts a drag that resizes the canvas.
     function _initDragResize() {
       const col = document.getElementById('canvasCol');
       if (!col) return;
@@ -592,7 +622,6 @@
         'cursor:col-resize', 'z-index:50', 'background:transparent',
       ].join(';');
 
-      // Make canvas-col position:relative so handle is anchored to it
       col.style.position = 'relative';
       col.insertBefore(handle, col.firstChild);
 
@@ -612,7 +641,7 @@
 
       document.addEventListener('mousemove', e => {
         if (!_dragging) return;
-        const delta   = _startX - e.clientX;   // dragging left = wider
+        const delta   = _startX - e.clientX;
         const newWidth = Math.max(180, Math.min(700, _startW + delta));
         col.style.width    = newWidth + 'px';
         col.style.minWidth = '180px';
@@ -627,14 +656,10 @@
       });
     }
 
-    // ── show / hide — called by sidebar.js v0.5.0 ────────────────────────────
-    // show() restores canvas to its last width (if it was hidden by hide()).
-    // hide() collapses the canvas to 0 without toggling _collapsed state so
-    // the user's last manual width is preserved when they open a chat.
     function show() {
       const col = document.getElementById('canvasCol');
       if (!col) return;
-      if (_collapsed) return;   // user deliberately collapsed — respect that
+      if (_collapsed) return;
       col.style.width      = _savedWidth + 'px';
       col.style.minWidth   = '180px';
       col.style.borderLeft = '0.5px solid var(--border)';
@@ -643,24 +668,20 @@
     function hide() {
       const col = document.getElementById('canvasCol');
       if (!col) return;
-      // Save current width before hiding so show() can restore it
       if (col.offsetWidth > 0) _savedWidth = col.offsetWidth;
       col.style.width      = '0';
       col.style.minWidth   = '0';
       col.style.borderLeft = 'none';
     }
 
-    // Initialise after DOM ready
     document.addEventListener('DOMContentLoaded', _initDragResize);
 
     return { toggle, show, hide };
   })();
 
-  // ── Help modal ────────────────────────────────────────────────────────────
   const lincolnHelp = (() => {
     function open()  { document.getElementById('helpOverlay').style.display = 'flex'; }
     function close() { document.getElementById('helpOverlay').style.display = 'none'; }
-    // Close on overlay click
     document.addEventListener('click', e => {
       const overlay = document.getElementById('helpOverlay');
       if (e.target === overlay) close();
