@@ -1,19 +1,15 @@
 /**
- * Lincoln Sidebar  v0.5.0
- * ========================
- * Changes from v0.4.1:
- *   - BUG FIX: clicking history item no longer shows project home + chat simultaneously
- *   - History: per-project chat toggle (hidden by default, matching Claude behaviour)
- *   - History: numbered group count badges
- *   - History: clearer group dividers with border-top
- *   - Project settings: folder browser writes full absolute path to input field
- *   - Project settings: path-resolved feedback under input
- *   - Project settings: Aider code folder has clear explainer
- *   - Project settings: write access warning shows/hides dynamically
- *   - openFolderPicker() uses webkitdirectory — on Windows/Chrome this is the native
- *     Explorer picker; the full path is NOT available via web API so we surface the
- *     folder name as a hint and ask user to paste the full path if needed
- *   - onPathInput() shows a green resolved badge when path looks absolute
+ * Lincoln Sidebar  v0.6.0  Navigator
+ * ======================================
+ * Changes from v0.5.x:
+ *   - Multi-select on history: checkboxes, shift+click range, ctrl+A, Escape clears
+ *   - Selection toolbar: count badge, Delete selected, Select all, Clear
+ *   - DELETE /api/history/selected bulk delete (new route)
+ *   - DELETE /api/history/all now correctly hits the new route
+ *   - Memory panel: full list view with timestamps, tags, checkboxes, delete buttons
+ *   - Memory multi-select: same pattern as history
+ *   - Persist sidebar_show_project_chats to DB on toggle
+ *   - hasSelection() and clearSelection() exposed for global Escape handler
  */
 
 const lincolnSidebar = (() => {
@@ -21,131 +17,37 @@ const lincolnSidebar = (() => {
   let _activeProjectId = null;
   let _activeProject   = null;
   let _activeMode      = 'chat';
-  let _indexPollTimer  = null;
-  let _showProjectChats = false;   // v0.5.0: project chats hidden by default
+  let _showProjectChats = false;
 
-  // ── Project settings state ────────────────────────────────────────────────
-  let _settingsProjectId   = null;
-  let _settingsWriteEnabled = false;
-
+  // Multi-select state
+  let _historySelected  = new Set();  // selected session ids
+  let _lastClickedIdx   = null;       // for shift+click range
+  let _memorySelected   = new Set();  // selected memory entry ids
 
   // ── Init ──────────────────────────────────────────────────────────────────
 
   async function init() {
-    await Promise.all([loadProjects(), loadHistory()]);
+    await _loadShowProjectChats();
+    await loadHistory();
+    await loadProjects();
+    _setupKeyboardShortcuts();
   }
 
-
-  // ── Projects ──────────────────────────────────────────────────────────────
-
-  async function loadProjects() {
+  async function _loadShowProjectChats() {
     try {
-      const res      = await fetch('/api/projects');
-      const projects = await res.json();
-      _renderProjects(projects);
-
-      if (!_activeProjectId && projects.length > 0) {
-        _showNoProjectHome();
-      }
-      if (projects.length === 0) {
-        document.getElementById('projectList').innerHTML =
-          '<div class="sidebar-empty-state">No projects yet — add one below.</div>';
-      }
-    } catch (err) {
-      console.error('Failed to load projects:', err);
-    }
+      const res  = await fetch('/api/settings');
+      const data = await res.json();
+      _showProjectChats = (data.ui_settings?.sidebar_show_project_chats === 'true');
+      _updateProjectChatsToggle();
+    } catch (_) { }
   }
 
-  function _showNoProjectHome() {
-    if (typeof lincolnChat !== 'undefined') {
-      lincolnChat.setActiveProject(null, null);
-    }
+  function _updateProjectChatsToggle() {
+    const btn = document.getElementById('projectChatsToggle');
+    if (btn) btn.textContent = `project chats: ${_showProjectChats ? 'on' : 'off'}`;
   }
 
-  function _renderProjects(projects) {
-    const list = document.getElementById('projectList');
-    if (!list) return;
-
-    const generalActive = !_activeProjectId;
-    let html = `
-      <div class="sidebar-project-item ${generalActive ? 'active' : ''}"
-           id="projectItemGeneral"
-           onclick="lincolnSidebar.selectNoProject()">
-        <div class="project-dot ${generalActive ? 'active' : ''}"></div>
-        <div class="project-info">
-          <div class="project-name">General</div>
-          <div class="project-meta">No project — open chat</div>
-        </div>
-      </div>
-    `;
-
-    html += projects.map(p => `
-      <div class="sidebar-project-item ${p.id === _activeProjectId ? 'active' : ''}"
-           id="projectItem_${p.id}"
-           onclick="lincolnSidebar.selectProject(${p.id}, ${JSON.stringify(p).replace(/"/g, '&quot;')})">
-        <div class="project-dot ${p.id === _activeProjectId ? 'active' : ''}"></div>
-        <div class="project-info">
-          <div class="project-name">${_esc(p.display_name)}</div>
-          <div class="project-meta">
-            ${p.vector_count
-              ? `<span style="color:var(--text-success)">${p.vector_count} vectors</span>`
-              : 'No index'}
-          </div>
-        </div>
-        <button class="project-settings-btn"
-                onclick="event.stopPropagation();lincolnSidebar.openProjectSettings(${p.id}, ${JSON.stringify(p).replace(/"/g, '&quot;')})"
-                title="Project settings">
-          <i class="ti ti-settings"></i>
-        </button>
-      </div>
-    `).join('');
-
-    list.innerHTML = html;
-  }
-
-  function selectNoProject() {
-    _activeProjectId = null;
-    _activeProject   = null;
-
-    document.querySelectorAll('.sidebar-project-item').forEach(el => el.classList.remove('active'));
-    document.querySelectorAll('.project-dot').forEach(el => el.classList.remove('active'));
-    document.getElementById('projectItemGeneral')?.classList.add('active');
-    document.getElementById('projectItemGeneral')?.querySelector('.project-dot')?.classList.add('active');
-
-    document.getElementById('topbarProjectBadge').textContent = 'No project';
-
-    // Show general welcome (NOT project home)
-    if (typeof lincolnChat !== 'undefined') {
-      lincolnChat.setActiveProject(null, null);
-      lincolnChat.showWelcome();
-    }
-    if (typeof lincolnCanvasUI !== 'undefined') lincolnCanvasUI.show();
-    loadHistory();
-  }
-
-  function selectProject(projectId, project) {
-    _activeProjectId = projectId;
-    _activeProject   = project;
-
-    document.querySelectorAll('.sidebar-project-item').forEach(el => el.classList.remove('active'));
-    document.querySelectorAll('.project-dot').forEach(el => el.classList.remove('active'));
-    const item = document.getElementById(`projectItem_${projectId}`);
-    item?.classList.add('active');
-    item?.querySelector('.project-dot')?.classList.add('active');
-
-    document.getElementById('topbarProjectBadge').textContent = project.display_name;
-
-    // Show project home — canvas hides on project home
-    if (typeof lincolnChat !== 'undefined') {
-      lincolnChat.setActiveProject(projectId, project);
-      lincolnChat.showProjectHome(project);
-    }
-    if (typeof lincolnCanvasUI !== 'undefined') lincolnCanvasUI.hide();
-    loadHistory();
-  }
-
-
-  // ── Chat history ──────────────────────────────────────────────────────────
+  // ── History ───────────────────────────────────────────────────────────────
 
   async function loadHistory() {
     try {
@@ -153,15 +55,8 @@ const lincolnSidebar = (() => {
       const sessions = await res.json();
       _renderHistory(sessions);
     } catch (err) {
-      console.error('Failed to load history:', err);
+      console.error('Load history error:', err);
     }
-  }
-
-  function toggleProjectHistory() {
-    _showProjectChats = !_showProjectChats;
-    const btn = document.getElementById('historyProjectToggle');
-    if (btn) btn.textContent = `project chats: ${_showProjectChats ? 'on' : 'off'}`;
-    loadHistory();
   }
 
   function _renderHistory(sessions) {
@@ -170,35 +65,38 @@ const lincolnSidebar = (() => {
 
     if (!sessions.length) {
       list.innerHTML = '<div class="sidebar-empty-state">No history yet.</div>';
+      _renderHistoryToolbar(0, 0);
       return;
     }
 
-    // Add bulk clear button to header if not already there
-    const header = document.querySelector('.sidebar-history .sidebar-section-label');
-    if (header && !document.getElementById('clearAllHistoryBtn')) {
-      const clearBtn       = document.createElement('button');
-      clearBtn.id          = 'clearAllHistoryBtn';
-      clearBtn.className   = 'sidebar-section-action';
-      clearBtn.title       = 'Clear all history';
-      clearBtn.innerHTML   = '<i class="ti ti-trash" style="color:var(--text-danger)"></i>';
-      clearBtn.onclick     = () => lincolnSidebar.clearAllHistory();
-      // Insert before the toggle+plus group
-      header.insertBefore(clearBtn, header.lastElementChild);
-    }
-
-    // Group sessions
     const projectSessions = sessions.filter(s => s.project_id === _activeProjectId && _activeProjectId);
     const generalSessions = sessions.filter(s => !s.project_id);
     const otherSessions   = sessions.filter(s => s.project_id && s.project_id !== _activeProjectId);
 
-    function _sessionHTML(s) {
+    let html      = '';
+    let allIds    = [];
+    let itemIndex = 0;
+
+    function _sessionHTML(s, idx) {
+      allIds.push(s.id);
+      const checked = _historySelected.has(s.id) ? 'checked' : '';
       return `
-        <div class="sidebar-history-item" id="historyItem_${s.id}"
-             onclick="lincolnSidebar._openHistorySession(${s.id})">
-          <div class="history-title">${_esc(s.title)}</div>
-          <div class="history-date">${_date(s.updated_at)}</div>
+        <div class="sidebar-history-item ${_historySelected.has(s.id) ? 'selected' : ''}"
+             id="historyItem_${s.id}"
+             data-session-id="${s.id}"
+             data-item-index="${idx}"
+             onclick="lincolnSidebar._onHistoryItemClick(event, ${s.id}, ${idx})">
+          <label class="history-checkbox-wrap" onclick="event.stopPropagation()">
+            <input type="checkbox" class="history-checkbox"
+              ${checked}
+              onchange="lincolnSidebar._onHistoryCheckbox(event, ${s.id}, ${idx})">
+          </label>
+          <div class="history-content" onclick="lincolnSidebar._openHistorySession(${s.id})">
+            <div class="history-title">${_esc(s.title)}</div>
+            <div class="history-date">${_date(s.updated_at)}</div>
+          </div>
           <button class="history-delete-btn" title="Delete chat"
-                  onclick="event.stopPropagation();lincolnSidebar.deleteSession(${s.id})">
+                  onclick="event.stopPropagation(); lincolnSidebar.deleteSession(${s.id})">
             <i class="ti ti-trash"></i>
           </button>
         </div>`;
@@ -211,21 +109,16 @@ const lincolnSidebar = (() => {
       </div>`;
     }
 
-    let html = '';
-
-    // Active project chats — only if toggle is on
     if (_showProjectChats && projectSessions.length && _activeProjectId) {
       html += _groupLabel(_activeProject?.display_name || 'Project', projectSessions.length);
-      html += projectSessions.map(_sessionHTML).join('');
+      projectSessions.forEach(s => { html += _sessionHTML(s, itemIndex++); });
     }
 
-    // General chats
     if (generalSessions.length) {
       if (html) html += _groupLabel('General', generalSessions.length);
-      html += generalSessions.map(_sessionHTML).join('');
+      generalSessions.forEach(s => { html += _sessionHTML(s, itemIndex++); });
     }
 
-    // Other project chats — only if toggle is on
     if (_showProjectChats) {
       const otherByProject = {};
       otherSessions.forEach(s => {
@@ -235,42 +128,169 @@ const lincolnSidebar = (() => {
       });
       Object.entries(otherByProject).forEach(([label, group]) => {
         html += _groupLabel(label, group.length);
-        html += group.map(_sessionHTML).join('');
+        group.forEach(s => { html += _sessionHTML(s, itemIndex++); });
       });
     }
 
-    if (!html) {
-      html = '<div class="sidebar-empty-state">No general chats yet.</div>';
-    }
+    if (!html) html = '<div class="sidebar-empty-state">No general chats yet.</div>';
 
     list.innerHTML = html;
+    list.dataset.allIds = JSON.stringify(allIds);
+    _renderHistoryToolbar(sessions.length, _historySelected.size);
   }
 
-  /**
-   * v0.5.0 BUG FIX: clicking a history item must:
-   *   1. Switch to chat mode
-   *   2. Hide the project home / welcome screen
-   *   3. Show the messages container
-   *   4. Load the session
-   * Previously the project home was left visible underneath.
-   */
-  function _openHistorySession(sessionId) {
-    switchMode('chat');
-    // Remove project home screen and welcome screen if present
-    document.getElementById('projectHome')?.remove();
-    document.getElementById('lincolnWelcome')?.remove();
-    // Show canvas (was hidden on project home)
-    if (typeof lincolnCanvasUI !== 'undefined') lincolnCanvasUI.show();
-    setTimeout(() => lincolnChat.loadSession(sessionId), 0);
+  // ── History selection toolbar ─────────────────────────────────────────────
+
+  function _renderHistoryToolbar(total, selectedCount) {
+    let toolbar = document.getElementById('historySelectionToolbar');
+    if (!toolbar) {
+      toolbar = document.createElement('div');
+      toolbar.id        = 'historySelectionToolbar';
+      toolbar.className = 'selection-toolbar';
+      const historySection = document.querySelector('.sidebar-history');
+      if (historySection) historySection.prepend(toolbar);
+    }
+
+    if (selectedCount === 0) {
+      toolbar.style.display = 'none';
+      return;
+    }
+
+    toolbar.style.display = 'flex';
+    toolbar.innerHTML = `
+      <span class="selection-count">${selectedCount} selected</span>
+      <button class="selection-btn" onclick="lincolnSidebar._selectAllHistory()">
+        Select all
+      </button>
+      <button class="selection-btn selection-btn-danger"
+        onclick="lincolnSidebar._deleteSelectedHistory()">
+        <i class="ti ti-trash"></i> Delete
+      </button>
+      <button class="selection-btn" onclick="lincolnSidebar.clearSelection()">
+        <i class="ti ti-x"></i>
+      </button>
+    `;
+  }
+
+  // ── History item click / checkbox handlers ────────────────────────────────
+
+  function _onHistoryItemClick(event, sessionId, itemIndex) {
+    // If clicking the checkbox or delete button, handled elsewhere
+    if (event.target.closest('.history-checkbox-wrap') ||
+        event.target.closest('.history-delete-btn')) return;
+
+    if (event.shiftKey && _lastClickedIdx !== null) {
+      // Shift+click: select range
+      _selectHistoryRange(_lastClickedIdx, itemIndex);
+    } else if (!event.ctrlKey && !event.metaKey) {
+      // Plain click with no selection active: open session
+      if (_historySelected.size === 0) {
+        _openHistorySession(sessionId);
+        return;
+      }
+      // If in selection mode, treat as toggle
+      _toggleHistoryItem(sessionId);
+    } else {
+      // Ctrl+click: toggle
+      _toggleHistoryItem(sessionId);
+    }
+    _lastClickedIdx = itemIndex;
+    _syncHistoryCheckboxes();
+    _renderHistoryToolbar(0, _historySelected.size);
+  }
+
+  function _onHistoryCheckbox(event, sessionId, itemIndex) {
+    event.stopPropagation();
+    if (event.shiftKey && _lastClickedIdx !== null) {
+      _selectHistoryRange(_lastClickedIdx, itemIndex);
+    } else {
+      _toggleHistoryItem(sessionId);
+    }
+    _lastClickedIdx = itemIndex;
+    _syncHistoryCheckboxes();
+    _renderHistoryToolbar(0, _historySelected.size);
+  }
+
+  function _toggleHistoryItem(sessionId) {
+    if (_historySelected.has(sessionId)) {
+      _historySelected.delete(sessionId);
+    } else {
+      _historySelected.add(sessionId);
+    }
+  }
+
+  function _selectHistoryRange(fromIdx, toIdx) {
+    const list = document.getElementById('historyList');
+    if (!list) return;
+    const items = [...list.querySelectorAll('[data-item-index]')];
+    const min   = Math.min(fromIdx, toIdx);
+    const max   = Math.max(fromIdx, toIdx);
+    items.forEach(item => {
+      const idx = parseInt(item.dataset.itemIndex, 10);
+      if (idx >= min && idx <= max) {
+        const sid = parseInt(item.dataset.sessionId, 10);
+        _historySelected.add(sid);
+      }
+    });
+  }
+
+  function _selectAllHistory() {
+    const list = document.getElementById('historyList');
+    if (!list) return;
+    const allIds = JSON.parse(list.dataset.allIds || '[]');
+    allIds.forEach(id => _historySelected.add(id));
+    _syncHistoryCheckboxes();
+    _renderHistoryToolbar(0, _historySelected.size);
+  }
+
+  function _syncHistoryCheckboxes() {
+    document.querySelectorAll('.sidebar-history-item').forEach(item => {
+      const sid      = parseInt(item.dataset.sessionId, 10);
+      const cb       = item.querySelector('.history-checkbox');
+      const selected = _historySelected.has(sid);
+      if (cb) cb.checked = selected;
+      item.classList.toggle('selected', selected);
+    });
+  }
+
+  function hasSelection() {
+    return _historySelected.size > 0 || _memorySelected.size > 0;
+  }
+
+  function clearSelection() {
+    _historySelected.clear();
+    _memorySelected.clear();
+    _lastClickedIdx = null;
+    _syncHistoryCheckboxes();
+    _renderHistoryToolbar(0, 0);
+    _syncMemoryCheckboxes();
+    _renderMemoryToolbar(0, 0);
+  }
+
+  async function _deleteSelectedHistory() {
+    const ids = [..._historySelected];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} selected chat${ids.length !== 1 ? 's' : ''}? This cannot be undone.`)) return;
+    try {
+      await fetch('/api/history/selected', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ids }),
+      });
+      ids.forEach(id => document.getElementById(`historyItem_${id}`)?.remove());
+      _historySelected.clear();
+      _renderHistoryToolbar(0, 0);
+    } catch (err) {
+      console.error('Bulk delete error:', err);
+    }
   }
 
   async function clearAllHistory() {
     if (!confirm('Delete all chat history? This cannot be undone.')) return;
     try {
       await fetch('/api/history/all', { method: 'DELETE' });
-      document.getElementById('historyList').innerHTML =
-        '<div class="sidebar-empty-state">No history yet.</div>';
-      document.getElementById('clearAllHistoryBtn')?.remove();
+      _historySelected.clear();
+      await loadHistory();
     } catch (err) {
       console.error('Clear all history error:', err);
     }
@@ -281,11 +301,279 @@ const lincolnSidebar = (() => {
     try {
       await fetch(`/api/history/${sessionId}`, { method: 'DELETE' });
       document.getElementById(`historyItem_${sessionId}`)?.remove();
+      _historySelected.delete(sessionId);
+      _renderHistoryToolbar(0, _historySelected.size);
     } catch (err) {
       console.error('Delete session error:', err);
     }
   }
 
+  function _openHistorySession(sessionId) {
+    switchMode('chat');
+    document.getElementById('projectHome')?.remove();
+    document.getElementById('lincolnWelcome')?.remove();
+    if (typeof lincolnCanvasUI !== 'undefined') lincolnCanvasUI.show();
+    setTimeout(() => lincolnChat.loadSession(sessionId), 0);
+  }
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+
+  function _setupKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+      // Ctrl+A to select all history when sidebar has focus
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        const historyList = document.getElementById('historyList');
+        if (historyList && document.activeElement?.closest('#historyList')) {
+          e.preventDefault();
+          _selectAllHistory();
+        }
+      }
+
+      // Delete key to delete selected items
+      if (e.key === 'Delete' && !e.ctrlKey) {
+        if (_historySelected.size > 0 &&
+            document.activeElement?.closest('#historyList')) {
+          _deleteSelectedHistory();
+        }
+        if (_memorySelected.size > 0 &&
+            document.activeElement?.closest('#memoryList')) {
+          _deleteSelectedMemory();
+        }
+      }
+    });
+  }
+
+  // ── Memory panel ──────────────────────────────────────────────────────────
+
+  async function loadMemory() {
+    const list = document.getElementById('memoryList');
+    if (!list) return;
+    try {
+      const res     = await fetch('/api/history/memory');
+      const entries = await res.json();
+      _renderMemory(entries);
+    } catch (err) {
+      list.innerHTML = '<div class="sidebar-empty-state">Could not load memory entries.</div>';
+    }
+  }
+
+  function _renderMemory(entries) {
+    const list = document.getElementById('memoryList');
+    if (!list) return;
+
+    if (!entries.length) {
+      list.innerHTML = `
+        <div class="sidebar-empty-state">
+          No saved memories yet.<br>
+          Use the <strong>Save session</strong> button after a chat to create one.
+        </div>`;
+      _renderMemoryToolbar(0, 0);
+      return;
+    }
+
+    list.innerHTML = entries.map((entry, idx) => {
+      const checked = _memorySelected.has(entry.id) ? 'checked' : '';
+      const tag     = entry.tag ? `<span class="memory-tag">${_esc(entry.tag)}</span>` : '';
+      const project = entry.project_display_name
+        ? `<span class="memory-project">${_esc(entry.project_display_name)}</span>` : '';
+      return `
+        <div class="memory-entry ${_memorySelected.has(entry.id) ? 'selected' : ''}"
+             id="memoryEntry_${entry.id}"
+             data-memory-id="${entry.id}"
+             data-item-index="${idx}">
+          <label class="history-checkbox-wrap" onclick="event.stopPropagation()">
+            <input type="checkbox" class="history-checkbox"
+              ${checked}
+              onchange="lincolnSidebar._onMemoryCheckbox(event, ${entry.id}, ${idx})">
+          </label>
+          <div class="memory-content">
+            <div class="memory-meta">
+              <span class="memory-date">${_date(entry.created_at)}</span>
+              ${tag}${project}
+            </div>
+            <div class="memory-text">${_esc(entry.content)}</div>
+          </div>
+          <button class="history-delete-btn" title="Delete memory"
+                  onclick="event.stopPropagation(); lincolnSidebar.deleteMemoryEntry(${entry.id})">
+            <i class="ti ti-trash"></i>
+          </button>
+        </div>
+      `;
+    }).join('');
+
+    _renderMemoryToolbar(entries.length, _memorySelected.size);
+  }
+
+  function _renderMemoryToolbar(total, selectedCount) {
+    let toolbar = document.getElementById('memorySelectionToolbar');
+    if (!toolbar) {
+      toolbar = document.createElement('div');
+      toolbar.id        = 'memorySelectionToolbar';
+      toolbar.className = 'selection-toolbar';
+      const memSection = document.getElementById('memoryView');
+      if (memSection) memSection.prepend(toolbar);
+    }
+
+    if (selectedCount === 0) {
+      toolbar.style.display = 'none';
+      return;
+    }
+
+    toolbar.style.display = 'flex';
+    toolbar.innerHTML = `
+      <span class="selection-count">${selectedCount} selected</span>
+      <button class="selection-btn selection-btn-danger"
+        onclick="lincolnSidebar._deleteSelectedMemory()">
+        <i class="ti ti-trash"></i> Delete
+      </button>
+      <button class="selection-btn" onclick="lincolnSidebar.clearSelection()">
+        <i class="ti ti-x"></i>
+      </button>
+    `;
+  }
+
+  function _onMemoryCheckbox(event, entryId, idx) {
+    if (_memorySelected.has(entryId)) {
+      _memorySelected.delete(entryId);
+    } else {
+      _memorySelected.add(entryId);
+    }
+    _syncMemoryCheckboxes();
+    _renderMemoryToolbar(0, _memorySelected.size);
+  }
+
+  function _syncMemoryCheckboxes() {
+    document.querySelectorAll('.memory-entry').forEach(item => {
+      const eid      = parseInt(item.dataset.memoryId, 10);
+      const cb       = item.querySelector('.history-checkbox');
+      const selected = _memorySelected.has(eid);
+      if (cb) cb.checked = selected;
+      item.classList.toggle('selected', selected);
+    });
+  }
+
+  async function deleteMemoryEntry(entryId) {
+    if (!confirm('Delete this memory entry?')) return;
+    try {
+      await fetch(`/api/history/memory/${entryId}`, { method: 'DELETE' });
+      document.getElementById(`memoryEntry_${entryId}`)?.remove();
+      _memorySelected.delete(entryId);
+      _renderMemoryToolbar(0, _memorySelected.size);
+    } catch (err) {
+      console.error('Delete memory error:', err);
+    }
+  }
+
+  async function _deleteSelectedMemory() {
+    const ids = [..._memorySelected];
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} memory entr${ids.length !== 1 ? 'ies' : 'y'}?`)) return;
+    try {
+      await fetch('/api/history/memory/selected', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ids }),
+      });
+      ids.forEach(id => document.getElementById(`memoryEntry_${id}`)?.remove());
+      _memorySelected.clear();
+      _renderMemoryToolbar(0, 0);
+    } catch (err) {
+      console.error('Bulk memory delete error:', err);
+    }
+  }
+
+  async function clearAllMemory() {
+    if (!confirm('Delete all saved memories? This cannot be undone.')) return;
+    try {
+      await fetch('/api/history/memory/all', { method: 'DELETE' });
+      _memorySelected.clear();
+      await loadMemory();
+    } catch (err) {
+      console.error('Clear all memory error:', err);
+    }
+  }
+
+  // ── Projects ──────────────────────────────────────────────────────────────
+
+  async function loadProjects() {
+    try {
+      const res      = await fetch('/api/projects');
+      const projects = await res.json();
+      _renderProjects(projects);
+    } catch (err) {
+      console.error('Load projects error:', err);
+    }
+  }
+
+  function _renderProjects(projects) {
+    const list = document.getElementById('projectList');
+    if (!list) return;
+    if (!projects.length) {
+      list.innerHTML = '<div class="sidebar-empty-state">No projects yet.</div>';
+      return;
+    }
+    list.innerHTML = projects.map(p => `
+      <div class="sidebar-project-item ${p.id === _activeProjectId ? 'active' : ''}"
+           id="projectItem_${p.id}"
+           onclick="lincolnSidebar.selectProject(${p.id})">
+        <div class="project-dot ${p.id === _activeProjectId ? 'active' : ''}"></div>
+        <div class="project-info">
+          <div class="project-name">${_esc(p.display_name)}</div>
+          <div class="project-meta">${p.vector_count?.toLocaleString() || 0} vectors</div>
+        </div>
+        <button class="project-settings-btn" title="Project settings"
+                onclick="event.stopPropagation(); lincolnSidebar.openProjectSettings(${p.id})">
+          <i class="ti ti-settings"></i>
+        </button>
+      </div>
+    `).join('');
+  }
+
+  async function selectProject(projectId) {
+    try {
+      const res     = await fetch(`/api/projects`);
+      const projects = await res.json();
+      const project  = projects.find(p => p.id === projectId);
+      if (!project) return;
+
+      _activeProjectId = projectId;
+      _activeProject   = project;
+
+      document.querySelectorAll('.sidebar-project-item').forEach(el => {
+        el.classList.toggle('active', el.id === `projectItem_${projectId}`);
+      });
+      document.querySelectorAll('.project-dot').forEach((dot, i) => {
+        dot.classList.toggle('active', i === projects.findIndex(p => p.id === projectId));
+      });
+
+      if (typeof lincolnChat !== 'undefined') {
+        lincolnChat.setActiveProject(projectId, project);
+        lincolnChat.showProjectHome(project);
+      }
+
+      await loadHistory();
+    } catch (err) {
+      console.error('Select project error:', err);
+    }
+  }
+
+  // ── Project chat toggle ───────────────────────────────────────────────────
+
+  async function toggleProjectChats() {
+    _showProjectChats = !_showProjectChats;
+    _updateProjectChatsToggle();
+
+    // Persist to DB
+    try {
+      await fetch('/api/settings', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ sidebar_show_project_chats: _showProjectChats ? 'true' : 'false' }),
+      });
+    } catch (_) { }
+
+    await loadHistory();
+  }
 
   // ── Mode switching ────────────────────────────────────────────────────────
 
@@ -303,8 +591,10 @@ const lincolnSidebar = (() => {
       const el = document.getElementById(id);
       if (el) el.style.display = key === mode ? 'flex' : 'none';
     });
-  }
 
+    // Load memory entries when switching to memory view
+    if (mode === 'memory') loadMemory();
+  }
 
   // ── New project panel ─────────────────────────────────────────────────────
 
@@ -319,8 +609,7 @@ const lincolnSidebar = (() => {
   }
 
   function closeNewProjectPanel() {
-    const overlay = document.getElementById('newProjectOverlay');
-    if (overlay) overlay.style.display = 'none';
+    document.getElementById('newProjectOverlay')?.style.setProperty('display', 'none');
   }
 
   async function createProject() {
@@ -328,10 +617,7 @@ const lincolnSidebar = (() => {
     const desc    = document.getElementById('newProjectDesc')?.value.trim() || '';
     const errorEl = document.getElementById('newProjectError');
 
-    if (!name) {
-      _showError(errorEl, 'Project name is required.');
-      return;
-    }
+    if (!name) { _showError(errorEl, 'Project name is required.'); return; }
 
     try {
       const res     = await fetch('/api/projects', {
@@ -340,313 +626,66 @@ const lincolnSidebar = (() => {
         body:    JSON.stringify({ display_name: name, path: '.', description: desc }),
       });
       const project = await res.json();
-
-      if (!res.ok) {
-        _showError(errorEl, project.error || 'Could not create project.');
-        return;
-      }
-
+      if (!res.ok) { _showError(errorEl, project.error || 'Could not create project.'); return; }
       closeNewProjectPanel();
       await loadProjects();
-      selectProject(project.id, project);
     } catch (err) {
-      _showError(errorEl, `Error: ${err.message}`);
+      _showError(errorEl, err.message);
     }
   }
-
 
   // ── Project settings panel ────────────────────────────────────────────────
 
-  function openProjectSettings(projectId, project) {
-    _settingsProjectId    = projectId;
-    _settingsWriteEnabled = project.write_enabled || false;
-
-    document.getElementById('projectSettingsTitle').textContent = project.display_name;
-    document.getElementById('projSettingsPath').value     = project.path && project.path !== '.' ? project.path : '';
-    document.getElementById('projSettingsCodePath').value = project.code_path || '';
-    document.getElementById('projectSettingsError').style.display = 'none';
-
-    // Show/reset path resolved badges
-    _updatePathResolved('projSettingsPath', 'ragPathResolved');
-    _updatePathResolved('projSettingsCodePath', 'aiderPathResolved');
-
-    _updateWriteToggle(_settingsWriteEnabled);
-
-    // Write access warning visibility
-    document.getElementById('writeAccessWarning').style.display = 'none';
-
-    // Index status
-    const statusEl = document.getElementById('projectIndexStatus');
-    if (project.vector_count) {
-      statusEl.innerHTML = `
-        <strong style="color:var(--text-success)">Indexed</strong>
-        <span style="color:var(--text-muted);font-size:11px;display:block;margin-top:2px">
-          ${project.vector_count} vectors · Last indexed ${_date(project.last_indexed)}
-        </span>`;
-    } else {
-      statusEl.innerHTML = `
-        <strong style="color:var(--text-muted)">Not indexed yet</strong>
-        <span style="color:var(--text-muted);font-size:11px;display:block;margin-top:2px">
-          Add a RAG source folder and click "Index now".
-        </span>`;
-    }
-
-    document.getElementById('projectSettingsOverlay').style.display = 'flex';
-  }
-
-  function closeProjectSettings() {
-    document.getElementById('projectSettingsOverlay').style.display = 'none';
-    _settingsProjectId = null;
-  }
-
-  function toggleWriteAccess() {
-    _settingsWriteEnabled = !_settingsWriteEnabled;
-    _updateWriteToggle(_settingsWriteEnabled);
-    document.getElementById('writeAccessWarning').style.display =
-      _settingsWriteEnabled ? 'flex' : 'none';
-  }
-
-  function _updateWriteToggle(enabled) {
-    const btn = document.getElementById('writeToggleBtn');
-    if (!btn) return;
-    if (enabled) {
-      btn.textContent       = 'On — write enabled';
-      btn.style.background  = 'var(--danger-bg)';
-      btn.style.color       = 'var(--text-danger)';
-      btn.style.borderColor = 'var(--text-danger)';
-    } else {
-      btn.textContent       = 'Off — read only';
-      btn.style.background  = 'var(--bg-surface)';
-      btn.style.color       = 'var(--text-secondary)';
-      btn.style.borderColor = 'var(--border)';
+  function openProjectSettings(projectId) {
+    // Implemented in lincoln_index.html event handlers
+    if (typeof window._openProjectSettingsPanel === 'function') {
+      window._openProjectSettingsPanel(projectId);
     }
   }
 
-  /**
-   * v0.5.0: Path input handler — shows green resolved badge when path
-   * looks like an absolute Windows or Unix path.
-   */
-  function onPathInput(inputId, resolvedId) {
-    _updatePathResolved(inputId, resolvedId);
+  // ── File browser (for file attach) ───────────────────────────────────────
+
+  function openFileBrowser(mode, callback) {
+    // Delegate to native file picker for now
+    // The sidebar file browser panel can be expanded in a future iteration
+    // BUG FIX (B4): callback receives File object from native picker
+    const input    = document.createElement('input');
+    input.type     = 'file';
+    input.onchange = () => {
+      if (input.files[0]) callback(input.files[0]);
+    };
+    input.click();
   }
 
-  function _updatePathResolved(inputId, resolvedId) {
-    const input    = document.getElementById(inputId);
-    const resolved = document.getElementById(resolvedId);
-    if (!input || !resolved) return;
-    const val  = input.value.trim();
-    const isAbs = /^[A-Za-z]:[\\\/]/.test(val) || val.startsWith('/');
-    if (val && isAbs) {
-      resolved.textContent = `✓ ${val}`;
-      resolved.classList.add('visible');
-    } else {
-      resolved.classList.remove('visible');
-    }
-  }
+  // ── Index polling (B1 fix: stops on complete or error) ───────────────────
 
-  /**
-   * v0.5.0: Folder picker.
-   * webkitdirectory on Chrome opens the Windows native folder picker.
-   * Due to browser security, we cannot read the full absolute path —
-   * only the relative folder name is available via the File API.
-   * We show the folder name as a hint in the placeholder and tell
-   * the user to paste the full path manually if the hint is insufficient.
-   */
-  function openFolderPicker(targetInputId, resolvedId) {
-    const picker = document.createElement('input');
-    picker.type  = 'file';
-    picker.setAttribute('webkitdirectory', '');
-    picker.setAttribute('directory', '');
-    picker.style.display = 'none';
-    document.body.appendChild(picker);
+  let _indexPollTimer = null;
 
-    picker.addEventListener('change', () => {
-      document.body.removeChild(picker);
-      if (!picker.files || picker.files.length === 0) return;
-
-      // webkitRelativePath = 'FolderName/file.ext' — extract folder name
-      const rel        = picker.files[0].webkitRelativePath || '';
-      const folderName = rel.split('/')[0] || '';
-
-      const input = document.getElementById(targetInputId);
-      if (!input) return;
-
-      // If input is already filled with an absolute path that ends in this
-      // folder name, don't overwrite it. Otherwise set folder name as hint.
-      const existing = input.value.trim();
-      if (existing && existing.toLowerCase().endsWith(folderName.toLowerCase())) {
-        // Already correct — just validate
-        _updatePathResolved(targetInputId, resolvedId);
-        return;
-      }
-
-      if (folderName) {
-        // Populate placeholder so user sees which folder was selected
-        input.placeholder = folderName + ' (paste full path, e.g. B:\\projects\\' + folderName + ')';
-        // If input is empty, fill with folder name as a starting point
-        if (!existing) {
-          input.value = folderName;
-        }
-      }
-      _updatePathResolved(targetInputId, resolvedId);
-    });
-
-    picker.click();
-  }
-
-  // Keep compatibility with old inline usage
-  function closeFileBrowser() {}
-  function _browsePath() {}
-  function _selectBrowserEntry() {}
-  function _confirmBrowser() {}
-
-  async function saveProjectSettings() {
-    if (!_settingsProjectId) return;
-    const path      = document.getElementById('projSettingsPath').value.trim();
-    const codePath  = document.getElementById('projSettingsCodePath').value.trim();
-    const errorEl   = document.getElementById('projectSettingsError');
-    errorEl.style.display = 'none';
-
-    try {
-      const res = await fetch(`/api/projects/${_settingsProjectId}`, {
-        method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          path:          path  || '.',
-          code_path:     codePath || '',
-          write_enabled: _settingsWriteEnabled,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        errorEl.textContent   = data.error || 'Could not save settings.';
-        errorEl.style.display = 'block';
-        return;
-      }
-        
-      closeProjectSettings();
-      await loadProjects();
-    } catch (err) {
-      errorEl.textContent   = `Error: ${err.message}`;
-      errorEl.style.display = 'block';
-    }
-  }
-
-  async function indexActiveProject() {
-    if (!_settingsProjectId) return;
-    // Save settings first so path is set before indexing
-    await saveProjectSettings();
-    _showToast('Indexing project…');
-    try {
-      const res  = await fetch(`/api/projects/${_settingsProjectId}/index`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ force_rebuild: false }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        _hideToast();
-        alert(`Index error: ${data.error}`);
-        return;
-      }
-      _pollIndexStatus(_settingsProjectId);
-    } catch (err) {
-      _hideToast();
-      console.error('Index error:', err);
-    }
-  }
-
-  async function deleteActiveProject() {
-    if (!_settingsProjectId) return;
-    const name = document.getElementById('projectSettingsTitle').textContent;
-    if (!confirm(`Delete project "${name}"? All chats in this project will also be deleted. This cannot be undone.`)) return;
-    try {
-      await fetch(`/api/projects/${_settingsProjectId}?wipe_index=false`, { method: 'DELETE' });
-      closeProjectSettings();
-      _activeProjectId = null;
-      _activeProject   = null;
-      await loadProjects();
-      selectNoProject();
-    } catch (err) {
-      console.error('Delete project error:', err);
-    }
-  }
-
-
-  // ── Index polling ─────────────────────────────────────────────────────────
-
-  function _pollIndexStatus(projectId) {
+  function startIndexPoll(projectId) {
     if (_indexPollTimer) clearInterval(_indexPollTimer);
     _indexPollTimer = setInterval(async () => {
       try {
         const res  = await fetch(`/api/projects/${projectId}/status`);
         const data = await res.json();
-        if (data.status === 'idle') {
+
+        // BUG FIX (B1): stop on complete OR error, not only on idle
+        if (['complete', 'error', 'idle'].includes(data.status)) {
           clearInterval(_indexPollTimer);
           _indexPollTimer = null;
-          _hideToast();
-          await loadProjects();
-        } else {
-          _showToast(data.message || 'Indexing…');
+
+          if (data.status === 'complete') {
+            if (typeof lincolnChat !== 'undefined') lincolnChat.showToast?.('Index complete', 'success');
+            await loadProjects();
+          } else if (data.status === 'error') {
+            if (typeof lincolnChat !== 'undefined') lincolnChat.showToast?.(`Index error: ${data.error}`, 'error');
+          }
         }
       } catch (_) {
         clearInterval(_indexPollTimer);
         _indexPollTimer = null;
-        _hideToast();
       }
     }, 1500);
   }
-
-  function _showToast(msg) {
-    const toast = document.getElementById('indexToast');
-    const label = document.getElementById('indexToastMessage');
-    if (toast) toast.style.display = 'block';
-    if (label) label.textContent = msg;
-  }
-
-  function _hideToast() {
-    const toast = document.getElementById('indexToast');
-    if (toast) toast.style.display = 'none';
-  }
-
-
-  // ── File browser (stubs — replaced by openFolderPicker) ──────────────────
-
-  function openFileBrowser(mode, callback) {
-    // Delegate to native picker for folder mode
-    if (mode === 'folder') {
-      const tempId = '_tmpFolderInput_' + Date.now();
-      const picker = document.createElement('input');
-      picker.type  = 'file';
-      picker.setAttribute('webkitdirectory', '');
-      picker.style.display = 'none';
-      document.body.appendChild(picker);
-      picker.addEventListener('change', () => {
-        document.body.removeChild(picker);
-        if (picker.files && picker.files.length > 0) {
-          const rel    = picker.files[0].webkitRelativePath || '';
-          const folder = rel.split('/')[0] || '';
-          if (folder && callback) callback(folder);
-        }
-      });
-      picker.click();
-    } else {
-      // File mode — use native file input
-      const input = document.createElement('input');
-      input.type   = 'file';
-      input.accept = '.py,.f90,.f95,.f03,.f,.for,.js,.ts,.css,.html,.sql,.md,.txt,.csv,.json,.yaml,.toml,.c,.cpp,.h,.sh,.bat,.tex,.maple,.mw,.mpl,.ipynb,.bib,.pdf,.docx,.xlsx';
-      input.style.display = 'none';
-      document.body.appendChild(input);
-      input.addEventListener('change', () => {
-        document.body.removeChild(input);
-        if (input.files && input.files.length > 0 && callback) {
-          callback(input.files[0].name, input.files[0]);
-        }
-      });
-      input.click();
-    }
-  }
-
 
   // ── Utilities ─────────────────────────────────────────────────────────────
 
@@ -656,77 +695,48 @@ const lincolnSidebar = (() => {
     return d.innerHTML;
   }
 
-  function _date(ts) {
-    if (!ts) return '';
-    const d = new Date(ts);
-    const now = new Date();
-    const diff = now - d;
-    if (diff < 60000)     return 'just now';
-    if (diff < 3600000)   return Math.floor(diff / 60000) + 'm ago';
-    if (diff < 86400000)  return Math.floor(diff / 3600000) + 'h ago';
-    if (diff < 604800000) return Math.floor(diff / 86400000) + 'd ago';
-    return d.toLocaleDateString();
+  function _date(isoStr) {
+    if (!isoStr) return '';
+    const d = new Date(isoStr), now = new Date();
+    if (now - d < 86400000) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   }
 
   function _showError(el, msg) {
     if (!el) return;
-    el.textContent   = msg;
-    el.style.display = 'block';
+    el.textContent    = msg;
+    el.style.display  = 'block';
   }
-
-  async function launchAider() {
-    if (!_activeProjectId) {
-      alert("Please select a project first.");
-      return;
-    }
-    
-    try {
-      const res = await fetch(`/api/projects/${_activeProjectId}/aider`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      
-      const data = await res.json();
-      if (!res.ok) {
-        alert(`Failed to launch Aider: ${data.error || 'Unknown error'}`);
-      } else {
-        console.log("Aider launched successfully in terminal.");
-      }
-    } catch (err) {
-      console.error('Aider launch error:', err);
-      alert(`Error launching Aider: ${err.message}`);
-    }
-  }
-
 
   // ── Public API ────────────────────────────────────────────────────────────
 
   return {
     init,
-    loadProjects,
     loadHistory,
+    loadProjects,
+    loadMemory,
+    clearAllHistory,
+    clearAllMemory,
+    deleteSession,
+    deleteMemoryEntry,
     selectProject,
-    selectNoProject,
+    toggleProjectChats,
     switchMode,
     openNewProjectPanel,
     closeNewProjectPanel,
     createProject,
     openProjectSettings,
-    closeProjectSettings,
-    saveProjectSettings,
-    indexActiveProject,
-    deleteActiveProject,
-    toggleWriteAccess,
-    toggleProjectHistory,
     openFileBrowser,
-    openFolderPicker,
-    onPathInput,
-    clearAllHistory,
-    deleteSession,
+    startIndexPoll,
+    hasSelection,
+    clearSelection,
     _openHistorySession,
-    launchAider,
-    get activeProjectId() { return _activeProjectId; },
-    get activeProject()   { return _activeProject; },
+    _onHistoryItemClick,
+    _onHistoryCheckbox,
+    _onMemoryCheckbox,
+    _deleteSelectedHistory,
+    _deleteSelectedMemory,
+    _selectAllHistory,
   };
 
 })();

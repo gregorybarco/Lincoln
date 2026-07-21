@@ -1,32 +1,17 @@
 """
-Lincoln Ollama Service
-======================
+Lincoln Ollama Service  v0.6.0
+================================
 Single owner of all communication with the local Ollama server.
 
-Owns:
-  - Sending chat messages to Qwen (or any model loaded in Ollama)
-  - Streaming token-by-token responses to the Flask UI via Server-Sent Events
-  - Fetching the list of available models from Ollama for the UI model selector
-  - Health checking the Ollama connection
-  - Context window sizing: per-request num_ctx derived dynamically from payload size
-    and the model's native context limit.
-
-Rules:
-  - No route or other service calls the Ollama API directly.
-    All Ollama communication flows through this module.
-  - The model used for each request is passed in as a parameter —
-    this service never assumes a default model internally.
-    The caller is responsible for resolving which model to use.
-  - num_ctx is never hardcoded. resolve_num_ctx_for_request() is called
-    on every chat request and adapts to actual payload size up to native limits.
-
-Used by:
-  - lincoln\\app\\routes\\lincoln_routes_chat.py    (streaming chat responses)
-  - lincoln\\app\\routes\\lincoln_routes_models.py  (model selector population)
+Changes in v0.6.0:
+  - System prompt assembled from DB (lincoln_database.get_active_system_prompt)
+    instead of hardcoded string. Fully editable from the Settings UI.
+  - Ollama timeout read from DB setting 'ollama_timeout_sec' at call time.
+  - OLLAMA_VRAM_GB fix: uses _optional() in configuration, not direct os.getenv.
+  - build_messages_with_rag_context() accepts pre-built system prompt string.
 """
 
 import json
-import re
 from typing import Generator
 
 import requests
@@ -45,27 +30,14 @@ _THINKING_MODEL_PATTERNS = (
 
 
 def _is_thinking_model(model: str) -> bool:
-    """Return True if this model supports chain-of-thought thinking mode."""
     return any(p in model.lower() for p in _THINKING_MODEL_PATTERNS)
 
 
 # ── Model discovery ───────────────────────────────────────────────────────────
 
 def get_available_models() -> list[dict]:
-    """
-    Fetch all models currently loaded in Ollama.
-    Used by the UI model selector — populates the dropdown dynamically
-    so any model pulled into Ollama appears automatically without config changes.
-
-    Returns:
-        List of dicts with keys: name, size, modified_at
-        Returns empty list if Ollama is unreachable.
-    """
     try:
-        response = requests.get(
-            f"{OLLAMA_BASE_URL}/api/tags",
-            timeout=5,
-        )
+        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
         response.raise_for_status()
         data   = response.json()
         models = data.get("models", [])
@@ -84,20 +56,8 @@ def get_available_models() -> list[dict]:
 # ── Health check ──────────────────────────────────────────────────────────────
 
 def check_ollama_health() -> dict:
-    """
-    Check whether the Ollama server is reachable and responding.
-
-    Returns:
-        dict with keys:
-          status  : 'ok' | 'unreachable'
-          url     : the Ollama base URL being checked
-          message : human-readable status description
-    """
     try:
-        response = requests.get(
-            f"{OLLAMA_BASE_URL}/api/tags",
-            timeout=5,
-        )
+        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
         response.raise_for_status()
         return {
             "status":  "ok",
@@ -120,15 +80,11 @@ def check_ollama_health() -> dict:
 
 # ── Context window detection ──────────────────────────────────────────────────
 
-_ctx_cache:    dict[str, int] = {}  # model → hardware ceiling (cached per process)
-_native_cache: dict[str, int] = {}  # model → model's own native context limit
+_ctx_cache:    dict[str, int] = {}
+_native_cache: dict[str, int] = {}
 
 
 def _fetch_model_info(model: str) -> dict:
-    """
-    Call Ollama /api/show and return the raw response dict.
-    Returns empty dict on any failure — callers handle absence gracefully.
-    """
     try:
         response = requests.post(
             f"{OLLAMA_BASE_URL}/api/show",
@@ -142,15 +98,6 @@ def _fetch_model_info(model: str) -> dict:
 
 
 def _parse_native_ctx(info: dict) -> int:
-    """
-    Extract the model's own declared context window from /api/show response.
-
-    Checks two locations:
-      1. modelfile PARAMETER block  — "PARAMETER num_ctx <value>"
-      2. model_info dict            — any key containing "context_length" (Ollama ≥0.3)
-
-    Returns 131072 (128k) if neither source has it as a generous modern default.
-    """
     modelfile = info.get("modelfile", "")
     for line in modelfile.splitlines():
         parts = line.strip().split()
@@ -165,84 +112,77 @@ def _parse_native_ctx(info: dict) -> int:
         if "context_length" in key and isinstance(val, int):
             return val
 
-    return 131072  # Assume large 128k limit for modern models
+    return 131072
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
-    """
-    Estimate the token count of a message list before sending to Ollama.
-    """
     total_chars = sum(len(m.get("content", "")) for m in messages)
     return int((total_chars / 4) * 1.10)
 
 
 def resolve_hardware_ceiling(model: str) -> int:
-    """
-    Return the maximum native num_ctx for this model.
-    Result is cached per process — /api/show is only called once per model.
-    """
     if model in _ctx_cache:
         return _ctx_cache[model]
 
-    info           = _fetch_model_info(model)
-    native_ctx     = _parse_native_ctx(info)
+    info       = _fetch_model_info(model)
+    native_ctx = _parse_native_ctx(info)
 
-    # Trust the model's native capabilities and let Ollama handle VRAM offloading dynamically
-    hardware_max   = native_ctx
-
-    _ctx_cache[model]    = hardware_max
+    _ctx_cache[model]    = native_ctx
     _native_cache[model] = native_ctx
 
     print(
-        f"[Lincoln] ctx ceiling — model={model} "
-        f"native={native_ctx} "
-        f"→ hardware_max={hardware_max}"
+        f"[Lincoln] ctx ceiling -- model={model} "
+        f"native={native_ctx} -> hardware_max={native_ctx}"
     )
-    return hardware_max
+    return native_ctx
 
 
 def resolve_num_ctx_for_request(model: str, messages: list[dict]) -> int:
-    """
-    Return the num_ctx to use for this specific request.
-    """
     hardware_max     = resolve_hardware_ceiling(model)
     estimated_tokens = _estimate_tokens(messages)
 
     if estimated_tokens > hardware_max:
         print(
-            f"[Lincoln] WARNING: payload exceeds model's native context — "
+            f"[Lincoln] WARNING: payload exceeds model native context -- "
             f"estimated={estimated_tokens} tokens "
             f"model_max={hardware_max} tokens "
-            f"model={model}. "
-            f"Oldest history will be truncated by Ollama."
+            f"model={model}. Oldest history will be truncated by Ollama."
         )
         return hardware_max
 
-    # Round up to next power of two
     window = 2048
     while window < estimated_tokens:
         window *= 2
 
     final = min(window, hardware_max)
     print(
-        f"[Lincoln] num_ctx — estimated={estimated_tokens} tokens "
-        f"→ window={final} (ceiling={hardware_max})"
+        f"[Lincoln] num_ctx -- estimated={estimated_tokens} tokens "
+        f"-> window={final} (ceiling={hardware_max})"
     )
     return final
 
 
-# ── Chat — single response ────────────────────────────────────────────────────
+def _get_timeout() -> int:
+    """Read ollama_timeout_sec from DB settings at call time."""
+    try:
+        from lincoln.lincoln_database import get_setting
+        return int(get_setting("ollama_timeout_sec", "180"))
+    except Exception:
+        return 180
+
+
+# ── Chat -- single response ───────────────────────────────────────────────────
 
 def chat(
     messages:    list[dict],
     model:       str,
     temperature: float = 0.7,
-    timeout:     int   = 180,
-    think:       bool  = False,
+    timeout:     int | None = None,
+    think:       bool = False,
 ) -> str:
-    """
-    Send a conversation to Ollama and return the complete response text.
-    """
+    if timeout is None:
+        timeout = _get_timeout()
+
     payload = {
         "model":    model,
         "messages": messages,
@@ -252,7 +192,7 @@ def chat(
             "num_ctx":     resolve_num_ctx_for_request(model, messages),
         },
     }
-    
+
     if _is_thinking_model(model):
         payload["think"] = think
         print(f"[Lincoln] thinking={'on' if think else 'off'} for {model}")
@@ -264,7 +204,7 @@ def chat(
     )
     response.raise_for_status()
 
-    data = response.json()
+    data    = response.json()
     content = data.get("message", {}).get("content", "")
 
     if not content:
@@ -276,18 +216,18 @@ def chat(
     return content
 
 
-# ── Chat — streaming ──────────────────────────────────────────────────────────
+# ── Chat -- streaming ─────────────────────────────────────────────────────────
 
 def stream_chat(
     messages:    list[dict],
     model:       str,
     temperature: float = 0.7,
-    timeout:     int   = 180,
-    think:       bool  = False,
+    timeout:     int | None = None,
+    think:       bool = False,
 ) -> Generator[str, None, None]:
-    """
-    Stream a conversation response from Ollama token by token.
-    """
+    if timeout is None:
+        timeout = _get_timeout()
+
     payload = {
         "model":    model,
         "messages": messages,
@@ -297,7 +237,7 @@ def stream_chat(
             "num_ctx":     resolve_num_ctx_for_request(model, messages),
         },
     }
-    
+
     if _is_thinking_model(model):
         payload["think"] = think
         print(f"[Lincoln] thinking={'on' if think else 'off'} for {model}")
@@ -352,27 +292,33 @@ def build_messages_with_rag_context(
     user_question:   str,
     rag_context:     str,
     session_history: list[dict],
+    system_prompt:   str = "",
     project_name:    str = "",
 ) -> list[dict]:
     """
-    Build a full message list for Ollama combining session history,
-    RAG-retrieved context, and the current user question.
+    Build a full message list for Ollama.
+    The system_prompt is now passed in (assembled from DB by the caller)
+    rather than being hardcoded here. Nothing is hardcoded in this function.
+
+    Args:
+        user_question   : The user's current message (may include file blob)
+        rag_context     : Retrieved RAG chunks (empty string if no project active)
+        session_history : Prior messages in this session (role/content dicts)
+        system_prompt   : Full assembled system prompt from DB (global + project blocks)
+        project_name    : Display name of the active project (for RAG context header)
     """
-    system_content = (
-        f"You are Lincoln, a local AI assistant. "
-        f"{'You have deep knowledge of the ' + project_name + ' codebase. ' if project_name else ''}"
-        f"You help with coding, analysis, and reasoning. "
-        f"You never modify files without explicit approval. "
-        f"You are running fully locally — no data leaves this machine.\n\n"
-        f"Formatting rules: respond conversationally for questions and explanations. "
-        f"Use markdown sparingly — only use code blocks for actual code, "
-        f"bullet points only for genuine lists, headers only for long structured documents. "
-        f"Do NOT bold every other phrase or use emojis in technical responses.\n\n"
-    )
+    # If no system prompt was provided (should not happen in normal flow),
+    # use a minimal fallback so behaviour is never undefined.
+    if not system_prompt:
+        system_prompt = "You are Lincoln, a local AI assistant."
+
+    system_content = system_prompt
 
     if rag_context:
+        project_label = project_name or "the active project"
         system_content += (
-            f"The following context was retrieved from the {project_name} "
+            f"\n\n---\n\n"
+            f"The following context was retrieved from the {project_label} "
             f"codebase index and is relevant to the user's question:\n\n"
             f"{rag_context}\n\n"
             f"Use this context to ground your answer in the actual code."

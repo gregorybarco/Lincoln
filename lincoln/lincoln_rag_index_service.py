@@ -1,29 +1,18 @@
 """
-Lincoln RAG Index Service
-=========================
+Lincoln RAG Index Service  v0.6.0
+===================================
 Owns all ChromaDB and LlamaIndex interactions for Lincoln.
 
-Owns:
-  - Building and updating ChromaDB vector indexes for projects
-  - Querying project indexes and returning ranked source chunks
-  - File collection and hash-based incremental indexing
-  - Security exclusion rules (no secrets, no binaries, no data files)
-
-Rules:
-  - No route or other service imports ChromaDB or LlamaIndex directly.
-    All vector store interactions flow through this module.
-  - Project data (path, collection name) always comes from lincoln_database.py.
-    This service never reads project config from .env or hardcoded values.
-  - The embed model is fixed at the value from lincoln_configuration.py.
-    This service never accepts an embed model as a parameter.
-  - Hash caches are stored per-project in data\hashes\ so incremental
-    re-indexing only processes files that have changed since the last run.
-
-Used by:
-  - lincoln\app\routes\lincoln_routes_projects.py  (index build triggered from UI)
-  - lincoln\app\routes\lincoln_routes_chat.py      (RAG query on each chat message)
-  - bin\lincoln_rag_query.bat                      (terminal query shortcut)
-  - bin\lincoln_rag_indexer.bat                    (terminal index shortcut)
+Changes in v0.6.0:
+  - BUG FIX (B2): build_project_index() and dry_run_project() now use 'path'
+    as the RAG source. 'code_path' is the Aider edit target, NOT the index root.
+    Fallback to code_path only when path == '.' and code_path is explicitly set.
+  - Switched from query_engine.query() to retrieval-only (retriever.retrieve()).
+    Eliminates the hidden second LLM call on every RAG query. Reduces latency
+    and removes a silent failure point.
+  - Added language extensions: Julia, R, MATLAB, Mathematica, Maple, SAS, Stata,
+    GAMS, AMPL, LP/MPS, Wolfram Language, RMarkdown.
+  - rag_snippet_chars read from DB settings (configurable from UI).
 """
 
 import hashlib
@@ -47,9 +36,6 @@ log = logging.getLogger("lincoln.rag_index_service")
 
 
 # ── File collection rules ─────────────────────────────────────────────────────
-# Exclusions: no secrets, binaries, compiled outputs, or data files.
-# Inclusions: all common source code and markup files.
-# This is YOUR machine — include everything that could be useful context.
 
 _EXCLUDE_DIRS = {
     "__pycache__", ".git", "venv", "env", ".venv", "lib64",
@@ -58,6 +44,7 @@ _EXCLUDE_DIRS = {
     "training_weights", "01_raw", "02_interim", "03_parameters",
     "04_results", ".next", ".nuxt", "coverage", ".cache",
     "CMakeFiles", "x64", "x86", "Debug", "Release",
+    "_tmp_build", "built_outputs",
 }
 
 _EXCLUDE_PATTERNS = {
@@ -80,12 +67,11 @@ _EXCLUDE_PATTERNS = {
     "*.map",
 }
 
-# All common source code and markup extensions
 _INCLUDE_EXTENSIONS = {
     # Python
     ".py", ".pyi",
     # Fortran
-    ".f90", ".f", ".for", ".f95", ".f03", ".f08",
+    ".f90", ".f", ".for", ".f95", ".f03", ".f08", ".fpp",
     # C / C++
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
     # Java / Kotlin / Scala
@@ -100,7 +86,7 @@ _INCLUDE_EXTENSIONS = {
     ".go", ".rs", ".swift", ".zig",
     # Shell / scripting
     ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
-    # Config and data that's useful context
+    # Config and data
     ".toml", ".yaml", ".yml", ".ini", ".cfg", ".conf",
     ".xml", ".gradle", ".cmake",
     # Docs / markdown
@@ -109,42 +95,69 @@ _INCLUDE_EXTENSIONS = {
     ".sql",
     # Ruby / PHP / Perl / Lua / R
     ".rb", ".php", ".pl", ".lua", ".r",
+    # Julia
+    ".jl",
+    # MATLAB / Octave
+    ".m",
+    # Mathematica / Wolfram
+    ".nb", ".wl",
+    # R extended
+    ".Rmd", ".rmd",
+    # Stats / Econometrics
+    ".sas", ".do", ".ado",
+    # Optimisation
+    ".gms", ".ampl", ".lp", ".mps",
+    # Maple
+    ".mw", ".mpl", ".maple", ".mm",
+    # LaTeX / BibTeX
+    ".latex", ".bib",
 }
 
-_FORTRAN_EXTENSIONS = {".f90", ".f", ".for", ".f95", ".f03", ".f08"}
+_LANG_MAP = {
+    ".py": "python",      ".pyi": "python",
+    ".f90": "fortran",    ".f": "fortran",   ".for": "fortran",
+    ".f95": "fortran",    ".f03": "fortran", ".f08": "fortran", ".fpp": "fortran",
+    ".c": "c",            ".cc": "cpp",      ".cpp": "cpp",     ".cxx": "cpp",
+    ".h": "c/cpp",        ".hh": "cpp",      ".hpp": "cpp",     ".hxx": "cpp",
+    ".java": "java",      ".kt": "kotlin",   ".scala": "scala",
+    ".js": "javascript",  ".mjs": "javascript", ".jsx": "javascript",
+    ".ts": "typescript",  ".tsx": "typescript",
+    ".html": "html",      ".htm": "html",
+    ".css": "css",        ".scss": "scss",   ".sass": "sass",
+    ".cs": "csharp",      ".fs": "fsharp",
+    ".go": "go",          ".rs": "rust",     ".swift": "swift",
+    ".sh": "shell",       ".bash": "shell",  ".ps1": "powershell",
+    ".bat": "batch",      ".cmd": "batch",
+    ".sql": "sql",
+    ".md": "markdown",    ".rst": "markdown",
+    ".rb": "ruby",        ".php": "php",     ".lua": "lua",
+    ".toml": "toml",      ".yaml": "yaml",   ".yml": "yaml",
+    ".xml": "xml",        ".cmake": "cmake",
+    ".r": "r",
+    # New in v0.6.0
+    ".jl": "julia",
+    ".m": "matlab",
+    ".nb": "mathematica", ".wl": "wolfram",
+    ".Rmd": "rmarkdown",  ".rmd": "rmarkdown",
+    ".sas": "sas",
+    ".do": "stata",       ".ado": "stata",
+    ".gms": "gams",
+    ".ampl": "ampl",
+    ".lp": "lp",          ".mps": "mps",
+    ".mw": "maple",       ".mpl": "maple",
+    ".maple": "maple",    ".mm": "maple",
+    ".latex": "latex",    ".bib": "bibtex",
+    ".txt": "text",       ".tex": "latex",
+}
 
 
 def _get_language(file_path: Path) -> str:
-    """Return a human-readable language label for a source file."""
-    suffix = file_path.suffix.lower()
-    _LANG_MAP = {
-        ".py": "python", ".pyi": "python",
-        ".f90": "fortran", ".f": "fortran", ".for": "fortran",
-        ".f95": "fortran", ".f03": "fortran", ".f08": "fortran",
-        ".c": "c", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp",
-        ".h": "c/cpp", ".hh": "cpp", ".hpp": "cpp", ".hxx": "cpp",
-        ".java": "java", ".kt": "kotlin", ".scala": "scala",
-        ".js": "javascript", ".mjs": "javascript", ".jsx": "javascript",
-        ".ts": "typescript", ".tsx": "typescript",
-        ".html": "html", ".htm": "html",
-        ".css": "css", ".scss": "scss", ".sass": "sass",
-        ".cs": "csharp", ".fs": "fsharp",
-        ".go": "go", ".rs": "rust", ".swift": "swift",
-        ".sh": "shell", ".bash": "shell", ".ps1": "powershell",
-        ".bat": "batch", ".cmd": "batch",
-        ".sql": "sql",
-        ".md": "markdown", ".rst": "markdown",
-        ".rb": "ruby", ".php": "php", ".lua": "lua",
-        ".toml": "toml", ".yaml": "yaml", ".yml": "yaml",
-        ".xml": "xml", ".cmake": "cmake",
-    }
-    return _LANG_MAP.get(suffix, "text")
+    return _LANG_MAP.get(file_path.suffix.lower(), "text")
 
 
-# ── Internal file utilities ───────────────────────────────────────────────────
+# ── File hashing ──────────────────────────────────────────────────────────────
 
 def _compute_file_hash(path: Path) -> str:
-    """Compute SHA-256 hash of a file for incremental indexing."""
     hasher = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
@@ -153,7 +166,6 @@ def _compute_file_hash(path: Path) -> str:
 
 
 def _get_hash_cache_path(project_name: str) -> Path:
-    """Return the path to the per-project hash cache file."""
     HASHES_DIR.mkdir(parents=True, exist_ok=True)
     return HASHES_DIR / f"lincoln_hashes_{project_name}.json"
 
@@ -173,7 +185,6 @@ def _save_hash_cache(project_name: str, cache: dict):
 
 
 def _should_exclude(path: Path) -> bool:
-    """Return True if this file should be excluded from indexing."""
     for part in path.parts:
         if part in _EXCLUDE_DIRS:
             return True
@@ -183,19 +194,34 @@ def _should_exclude(path: Path) -> bool:
     return False
 
 
+# ── RAG source path resolution ────────────────────────────────────────────────
+
+def _resolve_rag_source_path(project: dict) -> Path | None:
+    """
+    BUG FIX (B2): 'path' is the RAG source folder.
+    'code_path' is the Aider edit target -- never the index root.
+    Only fall back to code_path when path is '.' (conversation-only project)
+    AND code_path is explicitly set.
+    """
+    raw_path = project.get("path", "")
+    if raw_path and raw_path != ".":
+        p = Path(raw_path)
+        return p if p.exists() else None
+
+    # path is '.' -- conversation-only project, check code_path as fallback
+    code_path = project.get("code_path", "")
+    if code_path and code_path.strip():
+        p = Path(code_path)
+        return p if p.exists() else None
+
+    return None
+
+
+# ── File collection ───────────────────────────────────────────────────────────
+
 def collect_indexable_files(project_path: Path) -> list[Path]:
-    """
-    Walk a project directory and collect all files eligible for indexing.
-    Applies security exclusion rules — no secrets, binaries, or data files.
-
-    Args:
-        project_path : Root directory of the project to scan
-
-    Returns:
-        Sorted list of eligible file paths
-    """
-    files          = []
-    dirs_to_visit  = [project_path]
+    files         = []
+    dirs_to_visit = [project_path]
 
     while dirs_to_visit:
         current = dirs_to_visit.pop()
@@ -225,23 +251,6 @@ def collect_indexable_files(project_path: Path) -> list[Path]:
 # ── Index build ───────────────────────────────────────────────────────────────
 
 def build_project_index(project: dict, force_rebuild: bool = False) -> int:
-    """
-    Build or incrementally update the ChromaDB vector index for a project.
-    Only files that have changed since the last index run are re-embedded.
-
-    Args:
-        project       : Project dict from lincoln_database.get_project_by_id()
-                        Required keys: id, name, display_name, path, collection
-        force_rebuild : If True, re-embed all files regardless of hash cache.
-                        Use when switching embed models (full rebuild required).
-
-    Returns:
-        Total vector count in the collection after indexing.
-
-    Raises:
-        FileNotFoundError : If the project path does not exist on disk.
-        ImportError       : If ChromaDB or LlamaIndex dependencies are missing.
-    """
     import chromadb
     from llama_index.core import Settings, StorageContext, VectorStoreIndex
     from llama_index.core.node_parser import SentenceSplitter
@@ -250,15 +259,12 @@ def build_project_index(project: dict, force_rebuild: bool = False) -> int:
     from llama_index.llms.ollama import Ollama
     from llama_index.vector_stores.chroma import ChromaVectorStore
 
-    # Use code_path if set, otherwise fall back to path
-    # '.' is the sentinel for conversation-only projects — reject it
-    raw_path     = project.get("code_path") or project.get("path") or ""
-    project_path = Path(raw_path) if raw_path and raw_path != "." else None
-
-    if not project_path or not project_path.exists():
+    project_path = _resolve_rag_source_path(project)
+    if not project_path:
         raise FileNotFoundError(
-            f"No valid source folder is set for project '{project['display_name']}'.\n"
-            f"Open project settings → set a RAG source folder → then index."
+            f"No valid RAG source folder is set for project '{project['display_name']}'.\n"
+            f"Open project settings -> set a RAG source folder -> then index.\n"
+            f"Note: 'RAG source folder' (path) is separate from the Aider code folder (code_path)."
         )
 
     collection   = project["collection"]
@@ -270,7 +276,6 @@ def build_project_index(project: dict, force_rebuild: bool = False) -> int:
     log.info(f"  Embed      : {EMBED_MODEL}")
     log.info(f"  Chunk size : {CHUNK_SIZE}  overlap: {CHUNK_OVERLAP}")
 
-    # Configure LlamaIndex settings
     Settings.embed_model = OllamaEmbedding(
         model_name=EMBED_MODEL,
         base_url=OLLAMA_BASE_URL,
@@ -286,14 +291,12 @@ def build_project_index(project: dict, force_rebuild: bool = False) -> int:
         chunk_overlap=CHUNK_OVERLAP,
     )
 
-    # Connect to ChromaDB collection
     Path(CHROMA_DB_PATH).mkdir(parents=True, exist_ok=True)
     chroma_client     = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     chroma_collection = chroma_client.get_or_create_collection(collection)
     vector_store      = ChromaVectorStore(chroma_collection=chroma_collection)
     storage_context   = StorageContext.from_defaults(vector_store=vector_store)
 
-    # Collect and filter files
     all_files = collect_indexable_files(project_path)
     by_lang   = {}
     for f in all_files:
@@ -306,7 +309,6 @@ def build_project_index(project: dict, force_rebuild: bool = False) -> int:
         log.warning("No indexable files found. Check project path and exclusion rules.")
         return chroma_collection.count()
 
-    # Determine which files need re-embedding
     hash_cache = {} if force_rebuild else _load_hash_cache(project_name)
     to_index   = []
     unchanged  = 0
@@ -325,7 +327,6 @@ def build_project_index(project: dict, force_rebuild: bool = False) -> int:
         log.info(f"  Index is up to date. Vectors: {count}")
         return count
 
-    # Build document objects
     documents = []
     for file_path in to_index:
         try:
@@ -343,7 +344,6 @@ def build_project_index(project: dict, force_rebuild: bool = False) -> int:
         except Exception as e:
             log.warning(f"  Skipping {file_path.name}: {e}")
 
-    # Embed and store
     log.info(f"  Embedding {len(documents)} documents...")
     start_time = time.time()
     VectorStoreIndex.from_documents(
@@ -354,7 +354,6 @@ def build_project_index(project: dict, force_rebuild: bool = False) -> int:
     elapsed = time.time() - start_time
     log.info(f"  Embedded in {elapsed:.1f}s")
 
-    # Update hash cache
     for file_path in to_index:
         hash_cache[str(file_path)] = _compute_file_hash(file_path)
     _save_hash_cache(project_name, hash_cache)
@@ -364,7 +363,7 @@ def build_project_index(project: dict, force_rebuild: bool = False) -> int:
     return count
 
 
-# ── Index query ───────────────────────────────────────────────────────────────
+# ── Index query -- retrieval only (no hidden second LLM call) ─────────────────
 
 def query_project_index(
     question:     str,
@@ -373,28 +372,30 @@ def query_project_index(
     top_k:        int = DEFAULT_TOP_K,
 ) -> dict:
     """
-    Query a project's ChromaDB index and return the answer with source references.
+    Query a project's ChromaDB index and return retrieved source chunks.
 
-    Args:
-        question     : Natural language question
-        collection   : ChromaDB collection name (from project dict)
-        project_name : Display name for logging (optional)
-        top_k        : Number of source chunks to retrieve (default from config)
+    v0.6.0 CHANGE: Uses retriever.retrieve() instead of query_engine.query().
+    This eliminates the hidden second LLM call that previously ran inside
+    LlamaIndex before returning. The retrieved chunks are formatted as plain
+    text and injected directly into the main streaming call's system prompt.
 
     Returns:
         Dict with keys:
-          answer  : str — synthesized answer from the LLM
-          sources : list of dicts — each with file_path, language, score, snippet
-
-    Raises:
-        FileNotFoundError : If ChromaDB does not exist at CHROMA_DB_PATH
-        ValueError        : If the collection has not been indexed yet
+          answer  : str -- formatted retrieved chunks (NOT an LLM-synthesised answer)
+          sources : list of dicts -- each with file_path, language, score, snippet
     """
     import chromadb
     from llama_index.core import Settings, StorageContext, VectorStoreIndex
     from llama_index.embeddings.ollama import OllamaEmbedding
     from llama_index.llms.ollama import Ollama
     from llama_index.vector_stores.chroma import ChromaVectorStore
+
+    # Read snippet length from settings
+    try:
+        from lincoln.lincoln_database import get_setting
+        snippet_chars = int(get_setting("rag_snippet_chars", "500"))
+    except Exception:
+        snippet_chars = 500
 
     if not Path(CHROMA_DB_PATH).exists():
         raise FileNotFoundError(
@@ -420,44 +421,63 @@ def query_project_index(
         vector_store,
         storage_context=storage_context,
     )
-    query_engine = index.as_query_engine(
-        similarity_top_k=top_k,
-        response_mode="compact",
-    )
+
+    # Retrieval only -- no LLM call inside LlamaIndex
+    retriever = index.as_retriever(similarity_top_k=top_k)
 
     log.info(f"RAG query | project: {project_name} | top_k: {top_k}")
     log.info(f"  Question: {question!r}")
 
-    response = query_engine.query(question)
-    answer   = str(response)
+    nodes = retriever.retrieve(question)
 
     sources = []
-    if hasattr(response, "source_nodes"):
-        for node in response.source_nodes:
-            meta = node.metadata
-            sources.append({
-                "file_path": meta.get("file_path", "unknown"),
-                "file_name": meta.get("file_name", "unknown"),
-                "language":  meta.get("language", "unknown"),
-                "score":     round(getattr(node, "score", 0) or 0, 3),
-                "snippet":   node.text[:300].replace("\n", " "),
-            })
+    context_parts = []
 
-    log.info(f"  Answer generated. Sources: {len(sources)}")
-    return {"answer": answer, "sources": sources}
+    for node in nodes:
+        meta    = node.metadata
+        snippet = node.text[:snippet_chars].replace("\n", " ")
+        score   = round(getattr(node, "score", 0) or 0, 3)
+
+        sources.append({
+            "file_path": meta.get("file_path", "unknown"),
+            "file_name": meta.get("file_name", "unknown"),
+            "language":  meta.get("language", "unknown"),
+            "score":     score,
+            "snippet":   snippet,
+        })
+
+        # Format chunk for context injection
+        file_label = meta.get("file_path", "unknown")
+        lang_label = meta.get("language", "")
+        context_parts.append(
+            f"[Source: {file_label} | score: {score}]\n"
+            f"```{lang_label}\n{node.text.strip()}\n```"
+        )
+
+    # The 'answer' field is now the formatted context, not an LLM synthesis
+    formatted_context = "\n\n".join(context_parts)
+
+    log.info(f"  Retrieved {len(nodes)} chunks for context injection.")
+    return {"answer": formatted_context, "sources": sources}
 
 
-# ── Dry run — file preview ────────────────────────────────────────────────────
+# ── Dry run -- file preview ───────────────────────────────────────────────────
 
 def dry_run_project(project: dict) -> dict:
     """
     Preview which files would be indexed for a project without embedding anything.
+    BUG FIX (B2): uses _resolve_rag_source_path(), same as build_project_index().
     """
-    raw_path     = project.get("code_path") or project.get("path") or ""
-    project_path = Path(raw_path) if raw_path and raw_path != "." else None
+    project_path = _resolve_rag_source_path(project)
 
-    if not project_path or not project_path.exists():
-        return {"error": "No valid source folder set. Open project settings to add one."}
+    if not project_path:
+        return {
+            "error": (
+                "No valid RAG source folder set. "
+                "Open project settings to add a RAG source folder path. "
+                "Note: the Aider code folder is separate from the RAG source folder."
+            )
+        }
 
     all_files   = collect_indexable_files(project_path)
     file_infos  = []

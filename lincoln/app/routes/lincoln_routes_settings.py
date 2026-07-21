@@ -1,17 +1,29 @@
 """
-Lincoln Settings Routes
-=======================
-Flask routes for reading and writing Lincoln's UI settings and
-reporting system status.
+Lincoln Settings Routes  v0.6.0
+==================================
+Flask routes for reading and writing all Lincoln settings.
+
+NOTHING HIDDEN GUARANTEE:
+  Every value that affects Lincoln's behaviour is visible in the UI.
+  User settings are stored in lincoln_database.db (editable any time).
+  Infrastructure settings are stored in .env (editable via admin mode, restart required).
 
 Endpoints:
-  GET  /api/settings         Return all current settings
-  POST /api/settings         Save one or more settings
-  GET  /api/settings/status  Return full system health report
+  GET  /api/settings              All settings (user + infrastructure)
+  POST /api/settings              Save user settings
+  POST /api/settings/env          Admin: write a value back to .env (restart required)
+  GET  /api/settings/status       Full system health report
+  GET  /api/settings/fonts        Windows system font list
+  GET  /api/settings/tools        Detected tool paths (nvfortran, Maple, oneAPI, etc.)
 
-Settings are stored in lincoln_database.db via lincoln_database.py.
-Infrastructure settings (Ollama URL, embed model) are read-only
-in the UI — they live in .env and require a restart to change.
+  GET  /api/settings/prompts              All global system prompt blocks
+  POST /api/settings/prompts              Create a new global prompt block
+  PATCH /api/settings/prompts/<id>        Update a prompt block
+  DELETE /api/settings/prompts/<id>       Delete a prompt block
+  POST /api/settings/prompts/reorder     Set sort order for global prompts
+
+  GET  /api/projects/<id>/prompts         Project-level prompt blocks
+  POST /api/projects/<id>/prompts         Create a project prompt block
 """
 
 import os
@@ -27,59 +39,81 @@ from lincoln.lincoln_configuration import (
     OLLAMA_BASE_URL,
     UI_HOST,
     UI_PORT,
+    OLLAMA_VRAM_GB,
+    CHUNK_SIZE,
+    get_all_env_values,
+    write_env_key,
 )
-from lincoln.lincoln_database import get_all_settings, get_all_projects, save_settings
+from lincoln.lincoln_database import (
+    get_all_settings,
+    get_all_projects,
+    get_project_by_id,
+    save_settings,
+    get_global_system_prompts,
+    get_project_system_prompts,
+    create_system_prompt,
+    update_system_prompt,
+    delete_system_prompt,
+    reorder_system_prompts,
+)
 from lincoln.lincoln_ollama_service import check_ollama_health, get_available_models
 
 settings_blueprint = Blueprint("settings", __name__)
 
+# All keys writable via POST /api/settings (user-editable, no restart needed)
+_EDITABLE_KEYS = {
+    "theme",
+    "ui_font_family",
+    "default_project_id",
+    "canvas_open",
+    "history_limit",
+    "sidebar_show_project_chats",
+    "top_k",
+    "rag_snippet_chars",
+    "upload_max_text_kb",
+    "upload_max_doc_mb",
+    "upload_retention_days",
+    "ollama_timeout_sec",
+    "web_search_enabled",
+    "nvfortran_path",
+    "f2py_fcompiler_flag",
+    "wsl_distro",
+    "maple_path",
+    "oneapi_path",
+    "aider_launch_mode",
+}
+
+
+# ── User settings ─────────────────────────────────────────────────────────────
 
 @settings_blueprint.route("/api/settings", methods=["GET"])
 def get_settings():
     """
-    Return all current UI settings plus read-only infrastructure info.
-
-    Response:
-      JSON with:
-        ui_settings     : dict — user-editable settings from DB (theme, top_k, etc.)
-        infrastructure  : dict — read-only values from .env (ollama url, embed model)
+    Return all current settings plus infrastructure info.
+    All values visible -- nothing hidden.
     """
     ui_settings = get_all_settings()
+    env_values  = get_all_env_values()
+
     return jsonify({
-        "ui_settings": ui_settings,
+        "ui_settings":    ui_settings,
         "infrastructure": {
-            "ollama_base_url": OLLAMA_BASE_URL,
-            "llm_model":       LLM_MODEL,
-            "embed_model":     EMBED_MODEL,
+            "ollama_base_url": env_values.get("OLLAMA_API_BASE",    OLLAMA_BASE_URL),
+            "llm_model":       env_values.get("LINCOLN_LLM_MODEL",  LLM_MODEL),
+            "embed_model":     env_values.get("LINCOLN_EMBED_MODEL", EMBED_MODEL),
+            "chunk_size":      env_values.get("LINCOLN_CHUNK_SIZE",  str(CHUNK_SIZE)),
+            "ui_port":         env_values.get("LINCOLN_UI_PORT",     str(UI_PORT)),
+            "vram_gb":         env_values.get("LINCOLN_VRAM_GB",     str(OLLAMA_VRAM_GB)),
             "ui_host":         UI_HOST,
-            "ui_port":         UI_PORT,
         },
     })
 
 
 @settings_blueprint.route("/api/settings", methods=["POST"])
 def update_settings():
-    """
-    Save one or more UI settings.
-
-    Request JSON:
-      Any subset of editable setting keys:
-        theme               : 'light' | 'dark' | 'system'
-        default_project_id  : str (project DB id)
-        top_k               : str (integer as string)
-        canvas_open         : 'true' | 'false'
-
-    Returns:
-      JSON with the updated settings dict.
-
-    Note: Infrastructure settings (ollama_base_url, embed_model, etc.)
-          are ignored if included — they cannot be changed from the UI.
-    """
-    data = request.get_json() or {}
-
-    # Only allow editable keys through — never write infrastructure values
-    editable_keys = {"theme", "default_project_id", "top_k", "canvas_open"}
-    filtered = {k: v for k, v in data.items() if k in editable_keys}
+    """Save one or more user-editable settings."""
+    data     = request.get_json() or {}
+    filtered = {k: v for k, v in data.items() if k in _EDITABLE_KEYS}
 
     if not filtered:
         return jsonify({"error": "No valid settings keys provided."}), 400
@@ -88,26 +122,46 @@ def update_settings():
     return jsonify(get_all_settings())
 
 
+# ── Admin env write-back ──────────────────────────────────────────────────────
+
+@settings_blueprint.route("/api/settings/env", methods=["POST"])
+def update_env_setting():
+    """
+    Admin mode: write a single infrastructure value back to .env.
+    Only allowlisted keys are accepted.
+    A restart is required for the change to take effect.
+    """
+    data  = request.get_json() or {}
+    key   = data.get("key", "").strip()
+    value = data.get("value", "").strip()
+
+    if not key or not value:
+        return jsonify({"error": "key and value are required"}), 400
+
+    success = write_env_key(key, value)
+    if not success:
+        return jsonify({
+            "error": f"Key '{key}' is not in the admin allowlist and cannot be written."
+        }), 403
+
+    return jsonify({
+        "status":  "ok",
+        "key":     key,
+        "value":   value,
+        "message": "Value written to .env. Restart Lincoln for the change to take effect.",
+    })
+
+
+# ── System status ─────────────────────────────────────────────────────────────
+
 @settings_blueprint.route("/api/settings/status", methods=["GET"])
 def system_status():
-    """
-    Return a full system health report for the Settings panel status section.
-
-    Response:
-      JSON with status for each Lincoln component:
-        ollama    : health dict from lincoln_ollama_service
-        chromadb  : exists flag and per-project vector counts
-        database  : exists flag and row counts
-        mlflow    : configured flag (future)
-    """
     from lincoln import __version__, __codename__
 
-    # Ollama health
     ollama_status = check_ollama_health()
 
-    # ChromaDB status
-    chroma_exists    = Path(CHROMA_DB_PATH).exists()
-    chroma_projects  = []
+    chroma_exists   = Path(CHROMA_DB_PATH).exists()
+    chroma_projects = []
     if chroma_exists:
         try:
             import chromadb
@@ -125,25 +179,255 @@ def system_status():
         except Exception:
             pass
 
-    # Database status
     db_exists = DB_PATH.exists()
     db_size   = os.path.getsize(str(DB_PATH)) if db_exists else 0
 
+    # Check Tesseract availability
+    tesseract_ok = False
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["wsl", "-d", "Ubuntu", "--", "which", "tesseract"],
+            capture_output=True,
+            timeout=5,
+        )
+        tesseract_ok = result.returncode == 0
+    except Exception:
+        pass
+
     return jsonify({
-        "version":   f"{__version__} — {__codename__}",
-        "ollama":    ollama_status,
+        "version": f"{__version__} -- {__codename__}",
+        "ollama": ollama_status,
         "chromadb": {
             "status":   "ok" if chroma_exists else "not built",
             "path":     CHROMA_DB_PATH,
             "projects": chroma_projects,
         },
         "database": {
-            "status": "ok" if db_exists else "not found",
-            "path":   str(DB_PATH),
+            "status":  "ok" if db_exists else "not found",
+            "path":    str(DB_PATH),
             "size_kb": round(db_size / 1024, 1),
+        },
+        "tesseract": {
+            "status": "ok" if tesseract_ok else "not installed",
+            "note":   "Install in WSL: sudo apt install tesseract-ocr" if not tesseract_ok else "",
         },
         "mlflow": {
             "status": "not configured",
-            "note":   "Planned for a future session",
+            "note":   "Planned for v0.7.0",
         },
     })
+
+
+# ── System fonts ──────────────────────────────────────────────────────────────
+
+@settings_blueprint.route("/api/settings/fonts", methods=["GET"])
+def list_system_fonts():
+    """
+    Return a list of font family names available on this Windows machine.
+    Reads C:\Windows\Fonts\ and extracts font family names from .ttf/.otf files.
+    Falls back to a curated list if the font directory is inaccessible.
+    """
+    fonts_dir = Path("C:/Windows/Fonts")
+    font_names = set()
+
+    if fonts_dir.exists():
+        try:
+            from PIL import ImageFont
+            for font_file in fonts_dir.iterdir():
+                if font_file.suffix.lower() in (".ttf", ".otf", ".ttc"):
+                    try:
+                        # Extract family name from font file
+                        font = ImageFont.truetype(str(font_file), size=12)
+                        # PIL doesn't expose family name easily; use filename stem as fallback
+                        name = font_file.stem.replace("-", " ").replace("_", " ")
+                        font_names.add(name)
+                    except Exception:
+                        font_names.add(font_file.stem)
+        except ImportError:
+            # PIL not available -- use filename-based detection
+            for font_file in fonts_dir.iterdir():
+                if font_file.suffix.lower() in (".ttf", ".otf", ".ttc"):
+                    font_names.add(font_file.stem)
+
+    # Always include reliable system fonts
+    system_fonts = [
+        "system-ui",
+        "Segoe UI",
+        "Consolas",
+        "Cascadia Code",
+        "JetBrains Mono",
+        "Fira Code",
+        "Arial",
+        "Georgia",
+        "Times New Roman",
+        "Courier New",
+        "Calibri",
+        "Cambria",
+        "Verdana",
+        "Tahoma",
+    ]
+    for f in system_fonts:
+        font_names.add(f)
+
+    return jsonify({
+        "fonts": sorted(font_names, key=str.lower),
+    })
+
+
+# ── Tool paths ────────────────────────────────────────────────────────────────
+
+@settings_blueprint.route("/api/settings/tools", methods=["GET"])
+def get_tool_paths():
+    """
+    Return detected tool paths for the Build Tools section of the settings panel.
+    Results are cached for the process lifetime (detection runs at startup).
+    """
+    from lincoln.lincoln_cleanup_service import detect_tool_paths
+    tools = detect_tool_paths()
+    return jsonify({"tools": tools})
+
+
+# ── Global system prompts ─────────────────────────────────────────────────────
+
+@settings_blueprint.route("/api/settings/prompts", methods=["GET"])
+def list_global_prompts():
+    """Return all global system prompt blocks."""
+    prompts = get_global_system_prompts()
+    return jsonify(prompts)
+
+
+@settings_blueprint.route("/api/settings/prompts", methods=["POST"])
+def add_global_prompt():
+    """Create a new global system prompt block."""
+    data    = request.get_json() or {}
+    label   = (data.get("label") or "").strip()
+    content = (data.get("content") or "").strip()
+
+    if not label:
+        return jsonify({"error": "label is required"}), 400
+    if not content:
+        return jsonify({"error": "content is required"}), 400
+
+    prompt = create_system_prompt(
+        label   = label,
+        content = content,
+        scope   = "global",
+        enabled = bool(data.get("enabled", True)),
+    )
+    return jsonify(prompt), 201
+
+
+@settings_blueprint.route("/api/settings/prompts/<int:prompt_id>", methods=["PATCH"])
+def edit_global_prompt(prompt_id: int):
+    """Update label, content, enabled, or sort_order of a prompt block."""
+    data = request.get_json() or {}
+
+    label      = data.get("label")
+    content    = data.get("content")
+    enabled    = data.get("enabled")
+    sort_order = data.get("sort_order")
+
+    updated = update_system_prompt(
+        prompt_id  = prompt_id,
+        label      = label,
+        content    = content if content is not None else None,
+        enabled    = bool(enabled) if enabled is not None else None,
+        sort_order = sort_order,
+    )
+    if not updated:
+        return jsonify({"error": f"Prompt {prompt_id} not found"}), 404
+    return jsonify(updated)
+
+
+@settings_blueprint.route("/api/settings/prompts/<int:prompt_id>", methods=["DELETE"])
+def remove_global_prompt(prompt_id: int):
+    """Delete a global system prompt block."""
+    delete_system_prompt(prompt_id)
+    return "", 204
+
+
+@settings_blueprint.route("/api/settings/prompts/reorder", methods=["POST"])
+def reorder_global_prompts():
+    """
+    Set the display order for global prompts.
+    Body: { "ids": [3, 1, 2] } -- ordered list of prompt ids
+    """
+    data = request.get_json() or {}
+    ids  = data.get("ids", [])
+    if not isinstance(ids, list):
+        return jsonify({"error": "ids must be a list"}), 400
+    reorder_system_prompts(ids)
+    return jsonify({"status": "ok"})
+
+
+# ── Project system prompts ────────────────────────────────────────────────────
+
+@settings_blueprint.route("/api/projects/<int:project_id>/prompts", methods=["GET"])
+def list_project_prompts(project_id: int):
+    """Return all prompt blocks for a project."""
+    project = get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": f"Project {project_id} not found"}), 404
+    prompts = get_project_system_prompts(project_id)
+    return jsonify(prompts)
+
+
+@settings_blueprint.route("/api/projects/<int:project_id>/prompts", methods=["POST"])
+def add_project_prompt(project_id: int):
+    """Create a new system prompt block for a project."""
+    project = get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": f"Project {project_id} not found"}), 404
+
+    data    = request.get_json() or {}
+    label   = (data.get("label") or "").strip()
+    content = (data.get("content") or "").strip()
+
+    if not label:
+        return jsonify({"error": "label is required"}), 400
+    if not content:
+        return jsonify({"error": "content is required"}), 400
+
+    prompt = create_system_prompt(
+        label      = label,
+        content    = content,
+        scope      = "project",
+        project_id = project_id,
+        enabled    = bool(data.get("enabled", True)),
+    )
+    return jsonify(prompt), 201
+
+
+@settings_blueprint.route("/api/projects/<int:project_id>/prompts/<int:prompt_id>", methods=["PATCH"])
+def edit_project_prompt(project_id: int, prompt_id: int):
+    """Update a project-level prompt block."""
+    data = request.get_json() or {}
+    updated = update_system_prompt(
+        prompt_id  = prompt_id,
+        label      = data.get("label"),
+        content    = data.get("content"),
+        enabled    = bool(data.get("enabled")) if data.get("enabled") is not None else None,
+        sort_order = data.get("sort_order"),
+    )
+    if not updated:
+        return jsonify({"error": f"Prompt {prompt_id} not found"}), 404
+    return jsonify(updated)
+
+
+@settings_blueprint.route("/api/projects/<int:project_id>/prompts/<int:prompt_id>", methods=["DELETE"])
+def remove_project_prompt(project_id: int, prompt_id: int):
+    """Delete a project-level prompt block."""
+    delete_system_prompt(prompt_id)
+    return "", 204
+
+
+@settings_blueprint.route("/api/projects/<int:project_id>/prompts/reorder", methods=["POST"])
+def reorder_project_prompts(project_id: int):
+    """Set the display order for project prompts."""
+    data = request.get_json() or {}
+    ids  = data.get("ids", [])
+    if not isinstance(ids, list):
+        return jsonify({"error": "ids must be a list"}), 400
+    reorder_system_prompts(ids)
+    return jsonify({"status": "ok"})

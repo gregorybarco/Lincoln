@@ -11,6 +11,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+  <!-- JSZip for canvas bulk download -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   
   <!-- Syntax Highlighting (Highlight.js) -->
   <link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
@@ -65,7 +67,7 @@
         <button class="sidebar-section-action" onclick="lincolnHelp.open()" title="Help — what can Lincoln do?">
           <i class="ti ti-help" aria-hidden="true"></i>
         </button>
-        <span class="sidebar-version">v0.5.0</span>
+        <span class="sidebar-version">v0.6.0</span>
       </div>
     </div>
 
@@ -106,6 +108,7 @@
           <i class="ti ti-plus" aria-hidden="true"></i>
         </button>
       </div>
+      <div id="historySelectionToolbar" class="selection-toolbar" style="display:none"></div>
       <div class="sidebar-history-list" id="historyList">
         <!-- Populated by lincoln_sidebar.js — only real sessions shown -->
       </div>
@@ -198,17 +201,19 @@
                   <i class="ti ti-chevron-down" aria-hidden="true"></i>
                 </div>
                 
-                <!-- NEW THINK MODE PILL DROPDOWN -->
+                <!-- THINK MODE PILL DROPDOWN -->
                 <div class="input-model-pill" id="thinkModePill" onclick="lincolnChat.toggleThinkDropdown()" title="Normal — balanced, no reasoning overhead">
                   <span id="thinkModeLabel">◎ Normal</span>
                   <i class="ti ti-chevron-down" aria-hidden="true"></i>
                 </div>
 
-                <div class="input-cmd-hints">
-                  <button class="cmd-hint" onclick="lincolnChat.insertCommand('search ')">search …</button>
-                  <button class="cmd-hint" onclick="lincolnChat.insertCommand('fetch ')">fetch url</button>
-                  <button class="cmd-hint" onclick="lincolnChat.insertCommand('memory show')">memory</button>
-                </div>
+                <!-- WEB SEARCH TOGGLE PILL (v0.6.0) -->
+                <button class="web-search-pill" id="webSearchPill"
+                        onclick="lincolnChat.toggleWebSearch()"
+                        title="Click to enable web search for next message">
+                  <i class="ti ti-world-search" aria-hidden="true"></i>
+                  <span>Search</span>
+                </button>
               </div>
             </div>
             
@@ -252,17 +257,24 @@
           </div>
         </div>
 
-        <!-- MEMORY MODE -->
-        <div class="lincoln-memory-view" id="memoryView" style="display:none">
-          <div class="memory-panel">
-            <div class="memory-panel-header">
-              <div class="memory-panel-title">Session memory</div>
-              <button class="memory-save-btn" onclick="lincolnChat.saveMemory()">
+        <!-- MEMORY MODE (v0.6.0 — full list with timestamps, checkboxes, bulk delete) -->
+        <div class="lincoln-memory-view" id="memoryView" style="display:none;flex-direction:column;height:100%">
+          <div id="memorySelectionToolbar" class="selection-toolbar" style="display:none"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px 6px;flex-shrink:0;border-bottom:0.5px solid var(--border)">
+            <div style="font-size:13px;font-weight:500;color:var(--text-primary)">Session memory</div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button class="sidebar-section-action" title="Clear all memories"
+                      onclick="lincolnSidebar.clearAllMemory()">
+                <i class="ti ti-trash" style="color:var(--text-danger)" aria-hidden="true"></i>
+              </button>
+              <button class="sidebar-section-action" title="Save current session"
+                      onclick="lincolnChat.saveMemory()">
                 <i class="ti ti-device-floppy" aria-hidden="true"></i>
-                Save current session
               </button>
             </div>
-            <div class="memory-entries" id="memoryEntries"></div>
+          </div>
+          <div id="memoryList">
+            <!-- Populated by lincolnSidebar.loadMemory() -->
           </div>
         </div>
 
@@ -288,6 +300,7 @@
           <button class="canvas-tab"        id="canvasTabFiles" onclick="lincolnCanvas.switchTab('files')">Files</button>
           <button class="canvas-tab"        id="canvasTabDiff"  onclick="lincolnCanvas.switchTab('diff')">Diff</button>
         </div>
+        <div id="canvasSelectionToolbar" class="selection-toolbar canvas-selection-toolbar" style="display:none"></div>
         <div class="canvas-body" id="canvasBody">
           <!-- Rendered by lincolnCanvas -->
         </div>
@@ -339,8 +352,6 @@
       </button>
     </div>
   </div>
-</div>
-
 </div>
 
 <!-- ── PROJECT SETTINGS PANEL ───────────────────────────────────────────── -->
@@ -451,61 +462,9 @@
         <i class="ti ti-x" aria-hidden="true"></i>
       </button>
     </div>
-    <div class="panel-body settings-body">
-
-      <div class="settings-section">
-        <div class="settings-section-title">Appearance</div>
-        <div class="settings-row">
-          <div class="settings-label">Theme</div>
-          <div class="theme-toggle" id="themeToggle">
-            <button class="theme-btn" data-theme="light"  onclick="lincolnSettings.setTheme('light')">Light</button>
-            <button class="theme-btn" data-theme="dark"   onclick="lincolnSettings.setTheme('dark')">Dark</button>
-            <button class="theme-btn active" data-theme="system" onclick="lincolnSettings.setTheme('system')">System</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">Model</div>
-        <div class="settings-row">
-          <div>
-            <div class="settings-label">Default model</div>
-            <div class="settings-sublabel">Loaded on startup · change per session from the input bar</div>
-          </div>
-          <select class="settings-select" id="defaultModelSelect" onchange="lincolnSettings.setDefaultModel(this.value)">
-          </select>
-        </div>
-        <div class="settings-row">
-          <div>
-            <div class="settings-label">Embedding model</div>
-            <div class="settings-sublabel">Fixed — changing requires full re-index of every project</div>
-          </div>
-          <span class="settings-readonly-badge" id="embedModelBadge">nomic-embed-text</span>
-        </div>
-        <div class="settings-row">
-          <div>
-            <div class="settings-label">Suggestion mode</div>
-            <div class="settings-sublabel">Aider active — no file changes without your approval</div>
-          </div>
-          <span class="settings-status-badge settings-badge-on">On</span>
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">RAG</div>
-        <div class="settings-row">
-          <div class="settings-label">Chunks retrieved per query</div>
-          <input type="number" class="settings-number-input" id="topKInput"
-            min="1" max="20" value="5"
-            onchange="lincolnSettings.saveTopK(this.value)">
-        </div>
-      </div>
-
-      <div class="settings-section">
-        <div class="settings-section-title">System status</div>
-        <div class="settings-status-list" id="systemStatusList"></div>
-      </div>
-
+    <div class="panel-body settings-body" id="settingsPanelContent" style="overflow-y:auto">
+      <!-- Rendered dynamically by lincolnSettings.open() (v0.6.0) -->
+      <p style="font-size:12px;color:var(--text-muted);padding:12px 0">Loading settings…</p>
     </div>
   </div>
 </div>
@@ -529,9 +488,9 @@
         <div class="help-item"><span class="help-badge">Ask</span> Any question — Lincoln answers using your project code as context</div>
         <div class="help-item"><span class="help-badge">RAG</span> Select a project → your codebase is retrieved automatically</div>
         <div class="help-item"><span class="help-badge">File</span> Click 📎 to attach a .py / .f90 / .txt / .md file as context</div>
-        <div class="help-item"><span class="help-badge">Cmd</span> <code>search query</code> — web search via DuckDuckGo</div>
-        <div class="help-item"><span class="help-badge">Cmd</span> <code>fetch url</code> — fetch a web page and summarise it</div>
-        <div class="help-item"><span class="help-badge">Cmd</span> <code>memory show</code> — show saved session memories</div>
+        <div class="help-item"><span class="help-badge">Search</span> Click the globe pill in the input bar to enable web search for the next message</div>
+        <div class="help-item"><span class="help-badge">OCR</span> Attach a Bloomberg screenshot or image — Lincoln extracts the text automatically</div>
+        <div class="help-item"><span class="help-badge">Memory</span> Switch to Memory mode → Save current session to carry context forward</div>
       </div>
 
       <div class="help-section">

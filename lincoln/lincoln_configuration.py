@@ -1,24 +1,27 @@
 """
-Lincoln Configuration Loader
-=============================
+Lincoln Configuration Loader  v0.6.0
+======================================
 Loads and validates Lincoln's infrastructure configuration from .env.
 
 Owns:
   - Ollama connection details
   - Default LLM model (overridable per session from the UI model selector)
-  - Embed model (fixed — changing requires full re-index of every project)
-  - RAG chunk size (affects index structure, set before first index build)
+  - Embed model (fixed -- changing requires full re-index of every project)
+  - RAG chunk size
   - Web UI host and port
+  - VRAM cap for context window sizing
 
 Does NOT own:
-  - Project paths, names, or ChromaDB collection names
-    → managed by lincoln_database.py, created and edited from the UI
-  - Chat history, session state, or UI preferences
-    → managed by lincoln_database.py
-  - MLflow configuration (stubbed here, wired in a future session)
+  - Project paths, names, or ChromaDB collection names (lincoln_database.py)
+  - Chat history, session state, or UI preferences (lincoln_database.py)
+  - User-editable settings like top_k, history_limit (lincoln_database.py)
 
 Rule: No other file in Lincoln ever calls os.getenv() directly.
       All environment access flows through this module.
+
+Admin write-back: write_env_key() allows the settings UI (admin mode) to
+update .env values. Requires a restart to take effect. Never writes
+arbitrary keys -- only the allowlisted infrastructure keys.
 """
 
 import os
@@ -27,8 +30,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # ── Locate and load .env ──────────────────────────────────────────────────────
-# This file lives at lincoln\lincoln_configuration.py
-# .env lives at the project root (two levels up)
 
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_ENV_PATH)
@@ -37,10 +38,6 @@ load_dotenv(_ENV_PATH)
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _require(key: str) -> str:
-    """
-    Read a required environment variable.
-    Exits loudly at startup if missing — silent failures waste hours of debugging.
-    """
     val = os.getenv(key, "").strip()
     if not val:
         print(f"\n[Lincoln] FATAL: Required environment variable '{key}' is not set.")
@@ -51,12 +48,10 @@ def _require(key: str) -> str:
 
 
 def _optional(key: str, default: str) -> str:
-    """Read an optional environment variable, returning default if absent."""
     return os.getenv(key, default).strip()
 
 
 def _optional_int(key: str, default: int) -> int:
-    """Read an optional integer environment variable with a fallback default."""
     raw = os.getenv(key, "").strip()
     if not raw:
         return default
@@ -72,16 +67,14 @@ def _optional_int(key: str, default: int) -> int:
 
 # ── Filesystem paths ──────────────────────────────────────────────────────────
 
-# Project root — the parent of the lincoln\ package folder
-LINCOLN_ROOT = Path(__file__).resolve().parent.parent
-
-# Sub-directories — created on first use by the services that own them
-DATA_DIR         = LINCOLN_ROOT / "data"
-CHROMA_DB_PATH   = str(DATA_DIR / "chroma_db")
-HASHES_DIR       = DATA_DIR / "hashes"
-LOGS_DIR         = DATA_DIR / "logs"
-DB_PATH          = DATA_DIR / "lincoln_database.db"
-BIN_DIR          = LINCOLN_ROOT / "bin"
+LINCOLN_ROOT   = Path(__file__).resolve().parent.parent
+DATA_DIR       = LINCOLN_ROOT / "data"
+CHROMA_DB_PATH = str(DATA_DIR / "chroma_db")
+HASHES_DIR     = DATA_DIR / "hashes"
+LOGS_DIR       = DATA_DIR / "logs"
+DB_PATH        = DATA_DIR / "lincoln_database.db"
+BIN_DIR        = LINCOLN_ROOT / "bin"
+UPLOADS_DIR    = DATA_DIR / "uploads"
 
 
 # ── Ollama connection ─────────────────────────────────────────────────────────
@@ -90,31 +83,16 @@ OLLAMA_BASE_URL = _optional("OLLAMA_API_BASE", "http://localhost:11434")
 
 
 # ── LLM model ─────────────────────────────────────────────────────────────────
-# Default model loaded on startup.
-# The UI model selector overrides this per session by reading
-# available models live from Ollama's /api/tags endpoint.
-# To change the startup default, edit LINCOLN_LLM_MODEL in .env.
 
 LLM_MODEL = _require("LINCOLN_LLM_MODEL")
 
 
 # ── Embedding model ───────────────────────────────────────────────────────────
-# Treat as fixed infrastructure — do not expose as a UI-selectable option.
-#
-# Changing this value invalidates every ChromaDB collection in data\chroma_db\.
-# Every project must be fully re-indexed if this value ever changes.
-# This is a deliberate migration event, not a casual configuration change.
 
 EMBED_MODEL = _require("LINCOLN_EMBED_MODEL")
 
 
 # ── RAG tunables ──────────────────────────────────────────────────────────────
-# CHUNK_SIZE affects how source files are split before embedding.
-# Set this before building the first index — changing it mid-project
-# requires a --rebuild to apply consistently.
-#
-# CHUNK_OVERLAP and DEFAULT_TOP_K are sensible fixed defaults.
-# They are not exposed in the UI to avoid accidental misconfiguration.
 
 CHUNK_SIZE    = _optional_int("LINCOLN_CHUNK_SIZE", 512)
 CHUNK_OVERLAP = 50
@@ -122,55 +100,104 @@ DEFAULT_TOP_K = 5
 
 
 # ── Web UI ────────────────────────────────────────────────────────────────────
-# UI_HOST is always 127.0.0.1 — Lincoln is never exposed to the network.
-# UI_PORT is configurable in .env if 5000 conflicts with another local service.
 
 UI_HOST = "127.0.0.1"
 UI_PORT = _optional_int("LINCOLN_UI_PORT", 5000)
 
 
-# ── VRAM cap for context window sizing ───────────────────────────────────────
-# Used by lincoln_ollama_service.get_safe_num_ctx() to cap num_ctx per model.
-# Default 16 matches the RTX 5060 Ti 16GB. Change in .env if hardware changes.
-# Never expose this in the UI — it is a hardware fact, not a user preference.
+# ── VRAM cap -- fixed: use _optional() not os.getenv() directly ──────────────
 
-OLLAMA_VRAM_GB = float(os.getenv("LINCOLN_VRAM_GB", "16"))
+OLLAMA_VRAM_GB = float(_optional("LINCOLN_VRAM_GB", "16"))
 
 
-# ── MLflow (stubbed — wired in the MLflow session) ───────────────────────────
-# Keys are present and commented out in .env.
-# These values will be empty strings until MLflow is configured.
+# ── MLflow (stubbed) ──────────────────────────────────────────────────────────
 
 MLFLOW_TRACKING_URI  = _optional("MLFLOW_TRACKING_URI",  "")
 MLFLOW_ARTIFACT_ROOT = _optional("MLFLOW_ARTIFACT_ROOT", "")
 
 
+# ── Admin env write-back ──────────────────────────────────────────────────────
+
+# Only these keys may be written back to .env from the admin settings UI.
+# This is a hard allowlist -- never write arbitrary keys.
+_ENV_ADMIN_ALLOWLIST = {
+    "OLLAMA_API_BASE",
+    "LINCOLN_LLM_MODEL",
+    "LINCOLN_EMBED_MODEL",
+    "LINCOLN_CHUNK_SIZE",
+    "LINCOLN_UI_PORT",
+    "LINCOLN_VRAM_GB",
+}
+
+
+def write_env_key(key: str, value: str) -> bool:
+    """
+    Write a single key-value pair back to .env.
+    Only allowlisted infrastructure keys are accepted.
+    Returns True on success, False if the key is not allowlisted.
+    A restart is required for the change to take effect.
+    """
+    if key not in _ENV_ADMIN_ALLOWLIST:
+        return False
+
+    value = value.strip()
+    env_text = _ENV_PATH.read_text(encoding="utf-8") if _ENV_PATH.exists() else ""
+    lines = env_text.splitlines()
+
+    updated = False
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(f"{key}=") or stripped.startswith(f"{key} ="):
+            new_lines.append(f"{key}={value}")
+            updated = True
+        else:
+            new_lines.append(line)
+
+    if not updated:
+        new_lines.append(f"{key}={value}")
+
+    _ENV_PATH.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    return True
+
+
+def get_all_env_values() -> dict:
+    """
+    Return all infrastructure .env values for the admin settings panel.
+    All values are displayed in the UI -- nothing hidden.
+    """
+    return {
+        "OLLAMA_API_BASE":    OLLAMA_BASE_URL,
+        "LINCOLN_LLM_MODEL":  LLM_MODEL,
+        "LINCOLN_EMBED_MODEL": EMBED_MODEL,
+        "LINCOLN_CHUNK_SIZE": str(CHUNK_SIZE),
+        "LINCOLN_UI_PORT":    str(UI_PORT),
+        "LINCOLN_VRAM_GB":    str(OLLAMA_VRAM_GB),
+    }
+
+
 # ── Startup diagnostics ───────────────────────────────────────────────────────
 
 def print_startup_summary():
-    """
-    Print a clean human-readable summary of loaded infrastructure config.
-    Called by bin\lincoln.bat before Flask starts.
-    Project list is not shown here — it comes from lincoln_database.py at runtime.
-    """
     from lincoln import __version__, __codename__
 
-    print(f"\n{'═' * 55}")
-    print(f"  Lincoln v{__version__} — {__codename__}")
-    print(f"{'═' * 55}")
+    print(f"\n{'=' * 55}")
+    print(f"  Lincoln v{__version__} -- {__codename__}")
+    print(f"{'=' * 55}")
     print(f"  Ollama      : {OLLAMA_BASE_URL}")
-    print(f"  LLM model   : {LLM_MODEL}  (default · overridable in UI)")
+    print(f"  LLM model   : {LLM_MODEL}  (default, overridable in UI)")
     print(f"  Embed model : {EMBED_MODEL}  (fixed)")
     print(f"  Chunk size  : {CHUNK_SIZE}")
     print(f"  VRAM cap    : {OLLAMA_VRAM_GB} GB  (ctx window sizing)")
     print(f"  UI          : http://{UI_HOST}:{UI_PORT}")
     print(f"  Database    : {DB_PATH}")
     print(f"  ChromaDB    : {CHROMA_DB_PATH}")
+    print(f"  Uploads     : {UPLOADS_DIR}")
     if MLFLOW_TRACKING_URI:
         print(f"  MLflow      : {MLFLOW_TRACKING_URI}")
     else:
-        print(f"  MLflow      : not configured (future session)")
-    print(f"{'═' * 55}")
-    print(f"  Projects and settings are managed via the UI")
+        print(f"  MLflow      : not configured")
+    print(f"{'=' * 55}")
+    print(f"  All settings visible and editable via the UI Settings panel.")
     print(f"  Opening http://{UI_HOST}:{UI_PORT} ...")
-    print(f"{'═' * 55}\n")
+    print(f"{'=' * 55}\n")

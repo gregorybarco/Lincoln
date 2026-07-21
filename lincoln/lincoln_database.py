@@ -1,25 +1,21 @@
 """
-Lincoln Database Service
-========================
+Lincoln Database Service  v0.6.0
+=================================
 Single owner of data\lincoln_database.db (SQLite).
 
 Owns all structured persistence for Lincoln:
-  - Projects      : created, edited, deleted from the UI — never from .env
-  - Settings      : theme, default project, top-k, UI preferences
+  - Projects      : created, edited, deleted from the UI
+  - Settings      : all user-editable and admin settings (nothing hidden)
+  - System Prompts: global and per-project persona / instruction blocks
   - Chat sessions : conversation history with per-session project association
   - Chat messages : individual messages within sessions
   - Memory entries: session summaries saved for context injection on startup
 
 Rules:
   - No route, service, or script accesses lincoln_database.db directly.
-    All database access flows through functions in this module.
-  - Schema changes are additive only — never drop or rename existing columns.
-    Add new columns with sensible defaults so existing data stays valid.
-  - Collection names are auto-generated from the project display name.
+  - Schema changes are additive only -- never drop or rename existing columns.
+  - Collection names are auto-generated from project display name.
     Format: proj_<sanitized_name>_v1
-    The _v1 suffix supports future embed model migration (v2 on rebuild).
-  - Project paths and collection names are never stored in .env.
-    The UI is the only interface for project management.
 """
 
 import re
@@ -30,7 +26,30 @@ from pathlib import Path
 from lincoln.lincoln_configuration import CHROMA_DB_PATH, DB_PATH
 
 
-# ── Schema definition ─────────────────────────────────────────────────────────
+# ── Default Lincoln persona (seeded once, then fully editable from UI) ────────
+
+_DEFAULT_PERSONA = (
+    "You are Lincoln, a local AI assistant running entirely on this machine.\n"
+    "You help with coding, mathematical finance, quantitative research, "
+    "data science, Fortran/Python/Julia development, options pricing, "
+    "translation, document analysis, and web development.\n"
+    "You never modify files without explicit approval.\n"
+    "All inference runs locally via Ollama. No data leaves this machine.\n\n"
+    "Formatting rules: respond conversationally for questions and explanations. "
+    "Use markdown sparingly -- only use code blocks for actual code, "
+    "bullet points only for genuine lists, headers only for long structured documents. "
+    "Do not bold every other phrase. No emojis in technical responses."
+)
+
+_DEFAULT_FORMATTING_RULES = (
+    "Response length: match the complexity of the question. "
+    "Short questions get short answers. "
+    "Do not pad responses with summaries of what you just said. "
+    "Do not begin responses with 'Certainly!' or similar filler."
+)
+
+
+# ── Schema ────────────────────────────────────────────────────────────────────
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS lincoln_projects (
@@ -45,10 +64,6 @@ CREATE TABLE IF NOT EXISTS lincoln_projects (
     last_indexed  TEXT,
     created_at    TEXT DEFAULT CURRENT_TIMESTAMP
 );
-
--- Migration: add code_path and write_enabled to existing databases
--- SQLite ignores these if the columns already exist
-CREATE TABLE IF NOT EXISTS _lincoln_migration_v1 (done INTEGER);
 
 CREATE TABLE IF NOT EXISTS lincoln_settings (
     key   TEXT PRIMARY KEY,
@@ -80,25 +95,55 @@ CREATE TABLE IF NOT EXISTS lincoln_memory_entries (
     content    TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS lincoln_system_prompts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope      TEXT NOT NULL DEFAULT 'global',
+    project_id INTEGER REFERENCES lincoln_projects(id) ON DELETE CASCADE,
+    label      TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    enabled    INTEGER DEFAULT 1,
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
-# Default settings seeded on first run
+# All user-visible settings with defaults.
+# Nothing is hidden -- every value that affects Lincoln's behaviour lives here.
 _DEFAULT_SETTINGS = {
-    "theme":               "system",   # light | dark | system
-    "default_project_id":  "",         # id of the project active on startup
-    "top_k":               "5",        # RAG chunks retrieved per query
-    "canvas_open":         "true",     # whether canvas panel is open by default
+    # Appearance
+    "theme":                        "system",
+    "ui_font_family":               "system-ui",
+    # Chat behaviour
+    "default_project_id":           "",
+    "canvas_open":                  "true",
+    "history_limit":                "100",
+    "sidebar_show_project_chats":   "false",
+    # RAG
+    "top_k":                        "5",
+    "rag_snippet_chars":            "500",
+    # Uploads
+    "upload_max_text_kb":           "512",
+    "upload_max_doc_mb":            "2",
+    "upload_retention_days":        "30",
+    # Ollama / LLM
+    "ollama_timeout_sec":           "180",
+    "web_search_enabled":           "false",
+    # Build tools (your machine -- editable from UI)
+    "nvfortran_path":               "/opt/nvidia/hpc_sdk/Linux_x86_64/26.3/compilers/bin/nvfortran",
+    "f2py_fcompiler_flag":          "nv",
+    "wsl_distro":                   "Ubuntu",
+    "maple_path":                   "D:\\Maple\\bin.X86_64_WINDOWS",
+    "oneapi_path":                  "C:\\Program Files (x86)\\Intel\\oneAPI",
+    # Aider
+    "aider_launch_mode":            "cmd",
 }
 
 
-# ── Database connection ───────────────────────────────────────────────────────
+# ── Connection ────────────────────────────────────────────────────────────────
 
 def _get_connection() -> sqlite3.Connection:
-    """
-    Open a connection to lincoln_database.db.
-    Creates the data\ directory if it does not yet exist.
-    Enables foreign key enforcement on every connection.
-    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(str(DB_PATH))
     connection.row_factory = sqlite3.Row
@@ -106,68 +151,263 @@ def _get_connection() -> sqlite3.Connection:
     return connection
 
 
-# ── Database initialisation ───────────────────────────────────────────────────
+# ── Initialisation ────────────────────────────────────────────────────────────
 
 def initialise_database():
     """
-    Create all tables and seed default settings.
-    Safe to call on every startup — all CREATE TABLE statements use IF NOT EXISTS.
-    Default settings use INSERT OR IGNORE so existing values are never overwritten.
+    Create all tables, run migrations, seed defaults.
+    Safe to call on every startup -- all statements are idempotent.
     """
     with _get_connection() as connection:
         connection.executescript(_SCHEMA)
 
-        # Migrate existing databases — add columns if they don't exist yet
-        # SQLite doesn't support IF NOT EXISTS on ALTER TABLE, so we catch the error
-        for col_sql in [
+        # Additive migrations for existing databases
+        _migrations = [
             "ALTER TABLE lincoln_projects ADD COLUMN code_path TEXT",
             "ALTER TABLE lincoln_projects ADD COLUMN write_enabled INTEGER DEFAULT 0",
-        ]:
+        ]
+        for sql in _migrations:
             try:
-                connection.execute(col_sql)
+                connection.execute(sql)
             except Exception:
-                pass  # Column already exists — safe to ignore
+                pass  # Column already exists
 
+        # Seed default settings (INSERT OR IGNORE preserves existing values)
         for key, value in _DEFAULT_SETTINGS.items():
             connection.execute(
                 "INSERT OR IGNORE INTO lincoln_settings (key, value) VALUES (?, ?)",
                 (key, value),
             )
+
         connection.commit()
 
-    # Clean up ghost sessions from previous startup bugs — runs every startup, safe
+    # Seed default system prompts if the table is empty
+    _seed_default_system_prompts()
+
+    # Clean up ghost sessions from previous startup bugs
     delete_all_empty_sessions()
 
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
+def _seed_default_system_prompts():
+    """Seed the default Lincoln persona and formatting prompts on first run."""
+    with _get_connection() as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM lincoln_system_prompts WHERE scope = 'global'"
+        ).fetchone()[0]
+        if count > 0:
+            return  # Already seeded
+
+        now = _now()
+        connection.execute(
+            """
+            INSERT INTO lincoln_system_prompts
+                (scope, project_id, label, content, enabled, sort_order, created_at, updated_at)
+            VALUES ('global', NULL, ?, ?, 1, 0, ?, ?)
+            """,
+            ("Lincoln persona -- core behaviour", _DEFAULT_PERSONA, now, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO lincoln_system_prompts
+                (scope, project_id, label, content, enabled, sort_order, created_at, updated_at)
+            VALUES ('global', NULL, ?, ?, 1, 1, ?, ?)
+            """,
+            ("Response style rules", _DEFAULT_FORMATTING_RULES, now, now),
+        )
+        connection.commit()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _now() -> str:
-    """Current UTC timestamp as ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
 def _sanitize_name(display_name: str) -> str:
-    """
-    Convert a human-readable project name to a safe internal key.
-    'Options Pricing' → 'options_pricing'
-    'My Project 2!'   → 'my_project_2_'
-    """
     return re.sub(r"[^a-z0-9_]", "_", display_name.lower().strip())
 
 
 def _generate_collection_name(display_name: str) -> str:
-    """
-    Generate a ChromaDB collection name from a project display name.
-    'Options Pricing' → 'proj_options_pricing_v1'
-    The _v1 suffix supports future embed model migration without data loss.
-    """
     return f"proj_{_sanitize_name(display_name)}_v1"
 
 
-# ── Project management ────────────────────────────────────────────────────────
+# ── System prompts ────────────────────────────────────────────────────────────
+
+def get_global_system_prompts() -> list[dict]:
+    """Return all global prompt blocks ordered by sort_order."""
+    with _get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT * FROM lincoln_system_prompts
+            WHERE scope = 'global'
+            ORDER BY sort_order ASC, id ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_project_system_prompts(project_id: int) -> list[dict]:
+    """Return all prompt blocks for a specific project."""
+    with _get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT * FROM lincoln_system_prompts
+            WHERE scope = 'project' AND project_id = ?
+            ORDER BY sort_order ASC, id ASC
+            """,
+            (project_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_active_system_prompt(project_id: int | None = None) -> str:
+    """
+    Assemble the full system prompt for a chat request.
+    Concatenates all enabled global blocks, then all enabled project blocks.
+    Returns the combined string for injection into the Ollama message list.
+    """
+    parts = []
+
+    # Global blocks
+    with _get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT content FROM lincoln_system_prompts
+            WHERE scope = 'global' AND enabled = 1
+            ORDER BY sort_order ASC, id ASC
+            """
+        ).fetchall()
+    for row in rows:
+        parts.append(row["content"])
+
+    # Project-specific blocks
+    if project_id:
+        with _get_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT content FROM lincoln_system_prompts
+                WHERE scope = 'project' AND project_id = ? AND enabled = 1
+                ORDER BY sort_order ASC, id ASC
+                """,
+                (project_id,),
+            ).fetchall()
+        for row in rows:
+            parts.append(row["content"])
+
+    return "\n\n---\n\n".join(parts) if parts else "You are Lincoln, a local AI assistant."
+
+
+def create_system_prompt(
+    label:      str,
+    content:    str,
+    scope:      str = "global",
+    project_id: int | None = None,
+    enabled:    bool = True,
+) -> dict:
+    """Create a new system prompt block."""
+    now = _now()
+
+    # Get next sort_order for this scope
+    with _get_connection() as connection:
+        if scope == "global":
+            max_order = connection.execute(
+                "SELECT MAX(sort_order) FROM lincoln_system_prompts WHERE scope = 'global'"
+            ).fetchone()[0]
+        else:
+            max_order = connection.execute(
+                "SELECT MAX(sort_order) FROM lincoln_system_prompts WHERE scope = 'project' AND project_id = ?",
+                (project_id,),
+            ).fetchone()[0]
+
+        sort_order = (max_order or 0) + 1
+
+        cursor = connection.execute(
+            """
+            INSERT INTO lincoln_system_prompts
+                (scope, project_id, label, content, enabled, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (scope, project_id, label, content, 1 if enabled else 0, sort_order, now, now),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM lincoln_system_prompts WHERE id = ?",
+            (cursor.lastrowid,),
+        ).fetchone()
+    return dict(row)
+
+
+def update_system_prompt(
+    prompt_id:  int,
+    label:      str | None = None,
+    content:    str | None = None,
+    enabled:    bool | None = None,
+    sort_order: int | None = None,
+) -> dict | None:
+    """Update fields of an existing system prompt block."""
+    fields = []
+    values = []
+
+    if label is not None:
+        fields.append("label = ?")
+        values.append(label)
+    if content is not None:
+        fields.append("content = ?")
+        values.append(content)
+    if enabled is not None:
+        fields.append("enabled = ?")
+        values.append(1 if enabled else 0)
+    if sort_order is not None:
+        fields.append("sort_order = ?")
+        values.append(sort_order)
+
+    if not fields:
+        return None
+
+    fields.append("updated_at = ?")
+    values.append(_now())
+    values.append(prompt_id)
+
+    with _get_connection() as connection:
+        connection.execute(
+            f"UPDATE lincoln_system_prompts SET {', '.join(fields)} WHERE id = ?",
+            values,
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM lincoln_system_prompts WHERE id = ?",
+            (prompt_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_system_prompt(prompt_id: int):
+    """Delete a system prompt block by id."""
+    with _get_connection() as connection:
+        connection.execute(
+            "DELETE FROM lincoln_system_prompts WHERE id = ?",
+            (prompt_id,),
+        )
+        connection.commit()
+
+
+def reorder_system_prompts(ordered_ids: list[int]):
+    """
+    Set sort_order for a list of prompt ids.
+    ordered_ids: list of prompt ids in the desired display order.
+    """
+    with _get_connection() as connection:
+        for i, prompt_id in enumerate(ordered_ids):
+            connection.execute(
+                "UPDATE lincoln_system_prompts SET sort_order = ?, updated_at = ? WHERE id = ?",
+                (i, _now(), prompt_id),
+            )
+        connection.commit()
+
+
+# ── Projects ──────────────────────────────────────────────────────────────────
 
 def get_all_projects() -> list[dict]:
-    """Return all projects ordered by creation date (oldest first)."""
     with _get_connection() as connection:
         rows = connection.execute(
             "SELECT * FROM lincoln_projects ORDER BY created_at ASC"
@@ -176,7 +416,6 @@ def get_all_projects() -> list[dict]:
 
 
 def get_project_by_id(project_id: int) -> dict | None:
-    """Return a single project by its database ID, or None if not found."""
     with _get_connection() as connection:
         row = connection.execute(
             "SELECT * FROM lincoln_projects WHERE id = ?",
@@ -186,7 +425,6 @@ def get_project_by_id(project_id: int) -> dict | None:
 
 
 def get_project_by_name(name: str) -> dict | None:
-    """Return a single project by its internal sanitized name, or None if not found."""
     with _get_connection() as connection:
         row = connection.execute(
             "SELECT * FROM lincoln_projects WHERE name = ?",
@@ -196,31 +434,13 @@ def get_project_by_name(name: str) -> dict | None:
 
 
 def create_project(display_name: str, path: str, code_path: str | None = None) -> dict:
-    """
-    Create a new project record in the database.
-
-    Args:
-        display_name : Human-readable label shown in the UI (e.g. 'Options Pricing')
-        path         : Absolute path to the source folder to index into RAG
-        code_path    : Optional path to the code folder for Aider to read.
-                       Defaults to None (Aider uses path if not set).
-                       write_enabled is always False — Aider never auto-writes.
-
-    Returns:
-        The newly created project as a dict.
-
-    Raises:
-        ValueError : If display_name is empty, the path does not exist on disk,
-                     or a project with the same sanitized name already exists.
-    """
     name       = _sanitize_name(display_name)
     collection = _generate_collection_name(display_name)
 
     if not name or name == "_":
         raise ValueError("Project display name cannot be empty or contain only symbols.")
 
-    # path is optional for conversation-only projects — '.' is the sentinel value
-    if path and path != '.' and not Path(path).exists():
+    if path and path != "." and not Path(path).exists():
         raise ValueError(
             f"Project path does not exist on disk: {path}\n"
             f"Create the folder first, then add it as a project."
@@ -243,7 +463,7 @@ def create_project(display_name: str, path: str, code_path: str | None = None) -
                 f"Choose a different display name."
             )
 
-        connection.execute(
+        cursor = connection.execute(
             """
             INSERT INTO lincoln_projects
                 (name, display_name, path, code_path, write_enabled, collection, created_at)
@@ -252,27 +472,17 @@ def create_project(display_name: str, path: str, code_path: str | None = None) -
             (name, display_name, path, code_path or None, collection, _now()),
         )
         connection.commit()
-
         row = connection.execute(
-            "SELECT * FROM lincoln_projects WHERE name = ?",
-            (name,),
+            "SELECT * FROM lincoln_projects WHERE id = ?",
+            (cursor.lastrowid,),
         ).fetchone()
-
     return dict(row)
 
 
 def update_project_vector_count(project_id: int, vector_count: int):
-    """
-    Update the vector count and last indexed timestamp after a successful index build.
-    Called by lincoln_rag_index_service.py on completion.
-    """
     with _get_connection() as connection:
         connection.execute(
-            """
-            UPDATE lincoln_projects
-            SET vector_count = ?, last_indexed = ?
-            WHERE id = ?
-            """,
+            "UPDATE lincoln_projects SET vector_count = ?, last_indexed = ? WHERE id = ?",
             (vector_count, _now(), project_id),
         )
         connection.commit()
@@ -283,17 +493,7 @@ def update_project_settings(
     path:          str | None = None,
     code_path:     str | None = None,
     write_enabled: bool | None = None,
-):
-    """
-    Update a project's folder path, code path, and write_enabled flag.
-    Only fields explicitly passed are updated — None means leave unchanged.
-
-    Args:
-        project_id    : DB row ID of the project
-        path          : New RAG source folder path (None = no change)
-        code_path     : New Aider code folder path (None = no change)
-        write_enabled : True/False for Aider write access (None = no change)
-    """
+) -> None:
     fields = []
     values = []
 
@@ -320,15 +520,6 @@ def update_project_settings(
 
 
 def delete_project(project_id: int, wipe_chroma_collection: bool = False):
-    """
-    Delete a project from the database.
-
-    Args:
-        project_id              : Database row ID of the project to delete.
-        wipe_chroma_collection  : If True, also delete the ChromaDB collection
-                                  from disk. Default False preserves vectors in
-                                  case the deletion was accidental.
-    """
     project = get_project_by_id(project_id)
     if not project:
         raise ValueError(f"No project found with id {project_id}.")
@@ -339,7 +530,7 @@ def delete_project(project_id: int, wipe_chroma_collection: bool = False):
             client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
             client.delete_collection(project["collection"])
         except Exception:
-            pass  # Collection may not exist yet — not an error condition
+            pass
 
     with _get_connection() as connection:
         connection.execute(
@@ -352,7 +543,6 @@ def delete_project(project_id: int, wipe_chroma_collection: bool = False):
 # ── Settings ──────────────────────────────────────────────────────────────────
 
 def get_all_settings() -> dict:
-    """Return all settings as a flat key-value dict."""
     with _get_connection() as connection:
         rows = connection.execute(
             "SELECT key, value FROM lincoln_settings"
@@ -361,7 +551,6 @@ def get_all_settings() -> dict:
 
 
 def get_setting(key: str, default: str = "") -> str:
-    """Return a single setting value by key, or default if the key does not exist."""
     with _get_connection() as connection:
         row = connection.execute(
             "SELECT value FROM lincoln_settings WHERE key = ?",
@@ -371,7 +560,6 @@ def get_setting(key: str, default: str = "") -> str:
 
 
 def save_setting(key: str, value: str):
-    """Save a single setting. Creates the key if it does not exist."""
     with _get_connection() as connection:
         connection.execute(
             "INSERT OR REPLACE INTO lincoln_settings (key, value) VALUES (?, ?)",
@@ -381,7 +569,6 @@ def save_setting(key: str, value: str):
 
 
 def save_settings(updates: dict):
-    """Save multiple settings in a single transaction."""
     with _get_connection() as connection:
         for key, value in updates.items():
             connection.execute(
@@ -393,43 +580,63 @@ def save_settings(updates: dict):
 
 # ── Chat sessions ─────────────────────────────────────────────────────────────
 
-def get_all_sessions(limit: int = 50) -> list[dict]:
+def get_all_sessions(
+    limit:      int = 100,
+    project_id: int | None = None,
+) -> list[dict]:
     """
     Return recent chat sessions, newest first.
-    Excludes ghost sessions — 'New chat' with no messages (created by old startup bug).
-    Includes the project display name for sidebar rendering.
+    Excludes ghost sessions (New chat with no messages).
+    Optionally filters by project_id.
     """
     with _get_connection() as connection:
-        rows = connection.execute(
-            """
-            SELECT
-                s.*,
-                p.display_name AS project_display_name
-            FROM lincoln_chat_sessions s
-            LEFT JOIN lincoln_projects p ON s.project_id = p.id
-            WHERE NOT (
-                s.title = 'New chat'
-                AND NOT EXISTS (
-                    SELECT 1 FROM lincoln_chat_messages m WHERE m.session_id = s.id
+        if project_id is not None:
+            rows = connection.execute(
+                """
+                SELECT s.*, p.display_name AS project_display_name
+                FROM lincoln_chat_sessions s
+                LEFT JOIN lincoln_projects p ON s.project_id = p.id
+                WHERE s.project_id = ?
+                AND NOT (
+                    s.title = 'New chat'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM lincoln_chat_messages m WHERE m.session_id = s.id
+                    )
                 )
-            )
-            ORDER BY s.updated_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+                ORDER BY s.updated_at DESC
+                LIMIT ?
+                """,
+                (project_id, limit),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT s.*, p.display_name AS project_display_name
+                FROM lincoln_chat_sessions s
+                LEFT JOIN lincoln_projects p ON s.project_id = p.id
+                WHERE NOT (
+                    s.title = 'New chat'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM lincoln_chat_messages m WHERE m.session_id = s.id
+                    )
+                )
+                ORDER BY s.updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
     return [dict(row) for row in rows]
 
 
 def delete_all_empty_sessions():
-    """Delete all ghost 'New chat' sessions that have no messages. One-time cleanup."""
     with _get_connection() as connection:
         connection.execute(
             """
             DELETE FROM lincoln_chat_sessions
             WHERE title = 'New chat'
             AND NOT EXISTS (
-                SELECT 1 FROM lincoln_chat_messages m WHERE m.session_id = lincoln_chat_sessions.id
+                SELECT 1 FROM lincoln_chat_messages m
+                WHERE m.session_id = lincoln_chat_sessions.id
             )
             """
         )
@@ -437,21 +644,33 @@ def delete_all_empty_sessions():
 
 
 def delete_all_sessions():
-    """Delete all chat sessions and messages. Used by bulk clear history."""
+    """Delete ALL chat sessions and messages (bulk clear)."""
     with _get_connection() as connection:
         connection.execute("DELETE FROM lincoln_chat_messages")
         connection.execute("DELETE FROM lincoln_chat_sessions")
         connection.commit()
 
 
+def delete_sessions_bulk(session_ids: list[int]):
+    """Delete a specific set of sessions by id (multi-select delete)."""
+    if not session_ids:
+        return
+    placeholders = ",".join("?" * len(session_ids))
+    with _get_connection() as connection:
+        connection.execute(
+            f"DELETE FROM lincoln_chat_sessions WHERE id IN ({placeholders})",
+            session_ids,
+        )
+        connection.commit()
+
+
 def create_session(
-    title:      str       = "New chat",
+    title:      str = "New chat",
     project_id: int | None = None,
 ) -> dict:
-    """Create a new chat session and return it as a dict."""
     with _get_connection() as connection:
         now = _now()
-        connection.execute(
+        cursor = connection.execute(
             """
             INSERT INTO lincoln_chat_sessions
                 (title, project_id, created_at, updated_at)
@@ -461,13 +680,13 @@ def create_session(
         )
         connection.commit()
         row = connection.execute(
-            "SELECT * FROM lincoln_chat_sessions ORDER BY id DESC LIMIT 1"
+            "SELECT * FROM lincoln_chat_sessions WHERE id = ?",
+            (cursor.lastrowid,),
         ).fetchone()
     return dict(row)
 
 
 def rename_session(session_id: int, new_title: str):
-    """Rename a chat session. Called after the first user message is sent."""
     with _get_connection() as connection:
         connection.execute(
             "UPDATE lincoln_chat_sessions SET title = ? WHERE id = ?",
@@ -477,10 +696,6 @@ def rename_session(session_id: int, new_title: str):
 
 
 def delete_session(session_id: int):
-    """
-    Delete a chat session and all its messages.
-    Foreign key CASCADE handles message deletion automatically.
-    """
     with _get_connection() as connection:
         connection.execute(
             "DELETE FROM lincoln_chat_sessions WHERE id = ?",
@@ -492,7 +707,6 @@ def delete_session(session_id: int):
 # ── Chat messages ─────────────────────────────────────────────────────────────
 
 def get_session_messages(session_id: int) -> list[dict]:
-    """Return all messages for a session in chronological order."""
     with _get_connection() as connection:
         rows = connection.execute(
             """
@@ -506,20 +720,9 @@ def get_session_messages(session_id: int) -> list[dict]:
 
 
 def add_message(session_id: int, role: str, content: str) -> dict:
-    """
-    Add a message to a session and update the session's updated_at timestamp.
-
-    Args:
-        session_id : ID of the parent session
-        role       : 'user' | 'assistant' | 'system'
-        content    : Message text
-
-    Returns:
-        The newly created message as a dict.
-    """
     now = _now()
     with _get_connection() as connection:
-        connection.execute(
+        cursor = connection.execute(
             """
             INSERT INTO lincoln_chat_messages
                 (session_id, role, content, created_at)
@@ -533,7 +736,8 @@ def add_message(session_id: int, role: str, content: str) -> dict:
         )
         connection.commit()
         row = connection.execute(
-            "SELECT * FROM lincoln_chat_messages ORDER BY id DESC LIMIT 1"
+            "SELECT * FROM lincoln_chat_messages WHERE id = ?",
+            (cursor.lastrowid,),
         ).fetchone()
     return dict(row)
 
@@ -545,14 +749,6 @@ def save_memory_entry(
     project_id: int | None = None,
     tag:        str | None = None,
 ):
-    """
-    Save a memory entry for context injection on future session startups.
-
-    Args:
-        content    : The memory text (e.g. a session summary)
-        project_id : Optional project association
-        tag        : Optional category tag (e.g. 'session_summary', 'decision')
-    """
     with _get_connection() as connection:
         connection.execute(
             """
@@ -566,10 +762,6 @@ def save_memory_entry(
 
 
 def get_recent_memory_entries(limit: int = 5) -> list[dict]:
-    """
-    Return the most recent memory entries for session context injection.
-    Called by the Flask app on startup to populate the session context strip.
-    """
     with _get_connection() as connection:
         rows = connection.execute(
             """
@@ -582,3 +774,59 @@ def get_recent_memory_entries(limit: int = 5) -> list[dict]:
             (limit,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def get_all_memory_entries(project_id: int | None = None) -> list[dict]:
+    """Return all memory entries for the Memory panel full list."""
+    with _get_connection() as connection:
+        if project_id is not None:
+            rows = connection.execute(
+                """
+                SELECT m.*, p.display_name AS project_display_name
+                FROM lincoln_memory_entries m
+                LEFT JOIN lincoln_projects p ON m.project_id = p.id
+                WHERE m.project_id = ?
+                ORDER BY m.created_at DESC
+                """,
+                (project_id,),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT m.*, p.display_name AS project_display_name
+                FROM lincoln_memory_entries m
+                LEFT JOIN lincoln_projects p ON m.project_id = p.id
+                ORDER BY m.created_at DESC
+                """
+            ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_memory_entry(entry_id: int):
+    """Delete a single memory entry."""
+    with _get_connection() as connection:
+        connection.execute(
+            "DELETE FROM lincoln_memory_entries WHERE id = ?",
+            (entry_id,),
+        )
+        connection.commit()
+
+
+def delete_memory_entries_bulk(entry_ids: list[int]):
+    """Delete a specific set of memory entries (multi-select delete)."""
+    if not entry_ids:
+        return
+    placeholders = ",".join("?" * len(entry_ids))
+    with _get_connection() as connection:
+        connection.execute(
+            f"DELETE FROM lincoln_memory_entries WHERE id IN ({placeholders})",
+            entry_ids,
+        )
+        connection.commit()
+
+
+def delete_all_memory_entries():
+    """Delete all memory entries."""
+    with _get_connection() as connection:
+        connection.execute("DELETE FROM lincoln_memory_entries")
+        connection.commit()
