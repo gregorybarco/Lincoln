@@ -55,8 +55,14 @@ def extract_text_tesseract(
         Extracted text string. Returns an error message if Tesseract is unavailable.
     """
     try:
+        import os
         import pytesseract
         from PIL import Image
+        # Hardcoded WSL Tesseract binary path.
+        # Avoids PATH lookup failures when running from Windows venv.
+        pytesseract.pytesseract.tesseract_cmd = os.environ.get(
+            "TESSERACT_CMD", "/usr/bin/tesseract"
+        )
     except ImportError:
         return (
             "(OCR unavailable: pytesseract and/or Pillow not installed. "

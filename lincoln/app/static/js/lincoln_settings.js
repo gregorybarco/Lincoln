@@ -198,17 +198,24 @@ const lincolnSettings = (() => {
   }
 
   async function addPromptBlock() {
-    const label = 'New instruction block';
-    const content = '';
+    // Both label and content are required by the route — send non-empty defaults
+    const label   = 'New instruction block';
+    const content = 'Enter your instructions here.';
     try {
       const res = await fetch('/api/settings/prompts', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ label, content, enabled: true }),
       });
+      if (!res.ok) {
+        const err = await res.json();
+        console.error('Add prompt block failed:', err);
+        return;
+      }
       const newPrompt = await res.json();
+      // newPrompt.id is now the real DB id — no more undefined
       const container = document.getElementById('globalPromptBlocks');
-      if (container) {
+      if (container && newPrompt.id) {
         container.insertAdjacentHTML('beforeend', _promptBlockHTML(newPrompt));
       }
     } catch (err) {
@@ -664,26 +671,85 @@ const lincolnSettings = (() => {
     }
   }
 
-  // ── Model selector (in input bar) ─────────────────────────────────────────
+  // ── Model selector (pill dropdown in input bar) ───────────────────────────
+
+  let _modelDropdownOpen = false;
+  let _availableModels   = [];
 
   async function loadModels() {
     try {
-      const res    = await fetch('/api/models');
-      const models = await res.json();
-      const select = document.getElementById('modelSelect');
-      if (!select || !models.length) return;
+      const res  = await fetch('/api/models');
+      const data = await res.json();
+      _availableModels = data.models || [];
 
-      select.innerHTML = models.map(m =>
-        `<option value="${_esc(m.name)}">${_esc(m.name)}</option>`
-      ).join('');
-
-      const preferred = _v('default_model', '');
-      if (preferred && models.find(m => m.name === preferred)) {
-        select.value = preferred;
+      // Set default active model
+      const preferred = data.default_model || '';
+      if (!activeModel) {
+        activeModel = preferred || (_availableModels[0]?.name ?? 'qwen3.5:9b');
       }
-      activeModel = select.value;
-      select.addEventListener('change', () => { activeModel = select.value; });
+
+      // Update the pill label
+      _updateModelPillLabel();
+
+      // Build/rebuild the dropdown items
+      _renderModelDropdown();
+
+      // Close dropdown when clicking outside
+      document.addEventListener('click', (e) => {
+        const dropdown = document.getElementById('modelDropdown');
+        const pill     = document.getElementById('modelPill');
+        if (dropdown && pill && !pill.contains(e.target) && !dropdown.contains(e.target)) {
+          _closeModelDropdown();
+        }
+      }, { capture: true });
+
     } catch (_) { }
+  }
+
+  function _updateModelPillLabel() {
+    const label = document.getElementById('activeModelLabel');
+    if (label) label.textContent = activeModel || 'qwen3.5:9b';
+  }
+
+  function _renderModelDropdown() {
+    const dropdown = document.getElementById('modelDropdown');
+    if (!dropdown) return;
+    dropdown.innerHTML = _availableModels.map(m => `
+      <div class="model-dropdown-item ${m.name === activeModel ? 'selected' : ''}"
+           onclick="lincolnSettings.selectModel('${_esc(m.name)}')">
+        <span>${_esc(m.name)}</span>
+        <span class="model-dropdown-tag">${_formatSize(m.size)}</span>
+      </div>`).join('');
+  }
+
+  function _formatSize(bytes) {
+    if (!bytes) return '';
+    const gb = bytes / 1e9;
+    return gb >= 1 ? gb.toFixed(1) + ' GB' : Math.round(bytes / 1e6) + ' MB';
+  }
+
+  function toggleModelDropdown() {
+    _modelDropdownOpen ? _closeModelDropdown() : _openModelDropdown();
+  }
+
+  function _openModelDropdown() {
+    _modelDropdownOpen = true;
+    const dropdown = document.getElementById('modelDropdown');
+    if (dropdown) dropdown.classList.add('open');
+  }
+
+  function _closeModelDropdown() {
+    _modelDropdownOpen = false;
+    const dropdown = document.getElementById('modelDropdown');
+    if (dropdown) dropdown.classList.remove('open');
+  }
+
+  function selectModel(modelName) {
+    activeModel = modelName;
+    _updateModelPillLabel();
+    _renderModelDropdown();
+    _closeModelDropdown();
+    lincolnChat?.showToast?.(`Model: ${modelName}`, 'info');
   }
 
   // ── Event listeners ───────────────────────────────────────────────────────
@@ -717,6 +783,8 @@ const lincolnSettings = (() => {
     close,
     loadModels,
     toggleAdminMode,
+    toggleModelDropdown,
+    selectModel,
     addPromptBlock,
     _updatePromptField,
     _deletePromptBlock,

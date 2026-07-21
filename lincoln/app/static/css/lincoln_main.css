@@ -1850,3 +1850,89 @@ body { font-family: var(--ui-font); }
   animation: lincoln-spin 0.8s linear infinite;
   display: inline-block;
 }
+
+/* ── Canvas output panel (v0.6.1) ─────────────────────────────────────────── */
+
+.canvas-output-block {
+    border-top: 1px solid var(--border);
+    background: var(--bg-code, #1e1e1e);
+    border-radius: 0 0 6px 6px;
+    overflow: hidden;
+}
+
+.canvas-output-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+}
+
+.canvas-output-clear {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    padding: 2px 4px;
+    border-radius: 3px;
+    line-height: 1;
+    font-size: 11px;
+}
+
+    .canvas-output-clear:hover {
+        color: var(--text-danger);
+        background: var(--bg-hover);
+    }
+
+.canvas-output-pre {
+    margin: 0;
+    padding: 10px 12px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-code, #d4d4d4);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* Running state */
+.canvas-output-running {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--bg-elevated);
+}
+
+.canvas-output-spinner i {
+    animation: lincoln-spin 0.8s linear infinite;
+    display: inline-block;
+}
+
+@keyframes lincoln-spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Run button spinner state */
+.canvas-run-spinning {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+    .canvas-run-spinning i {
+        animation: lincoln-spin 0.8s linear infinite;
+        display: inline-block;
+    }
