@@ -2067,7 +2067,7 @@ body { font-family: var(--ui-font); }
     font-size: 13px;
     font-weight: 500;
     background: var(--accent);
-    color: #fff;
+    color: white !important;
     display: flex;
     align-items: center;
     gap: 4px;

@@ -107,6 +107,14 @@ CREATE TABLE IF NOT EXISTS lincoln_system_prompts (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS lincoln_pending_tool_calls (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   INTEGER NOT NULL,
+    tool_name    TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    arguments    TEXT NOT NULL,
+    created_at   TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 # All user-visible settings with defaults.

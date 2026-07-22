@@ -367,7 +367,6 @@ def _react_loop(
             tool_result = _execute_tool(tool_name, arguments, project)
             ollama_messages.append({
                 "role":         "tool",
-                "tool_call_id": tool_call_id,
                 "content":      tool_result,
             })
             yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': tool_name, 'result_preview': tool_result[:200]})}\n\n"
@@ -382,7 +381,6 @@ def _react_loop(
                 tool_result = _execute_tool(tool_name, arguments, project)
                 ollama_messages.append({
                     "role":         "tool",
-                    "tool_call_id": tool_call_id,
                     "content":      tool_result,
                 })
                 yield f"data: {json.dumps({'type': 'web_search', 'result_count': tool_result.count('[')})}\n\n"
@@ -403,7 +401,6 @@ def _react_loop(
             # Unknown tool — tell the LLM
             ollama_messages.append({
                 "role":         "tool",
-                "tool_call_id": tool_call_id,
                 "content":      f"Unknown tool '{tool_name}'. This tool is not registered.",
             })
 
@@ -667,7 +664,6 @@ def resolve_tool():
 
         ollama_messages.append({
             "role":         "tool",
-            "tool_call_id": tool_call_id,
             "content":      tool_result,
         })
 
