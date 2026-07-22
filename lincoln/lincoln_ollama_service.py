@@ -671,3 +671,5 @@ def stream_chat_with_tools(
 
     except Exception as e:
         yield {"type": "error", "message": str(e)}
+
+
