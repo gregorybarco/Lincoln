@@ -11,17 +11,13 @@
  *     public clearPendingFile() still works for backwards compat.
  *   - Topbar project badge now updates correctly on setActiveProject().
  *
- * Changes from v0.5.2:
- *   - BUG FIX (B3): web search prefix now streams correctly via SSE
- *   - BUG FIX (B4): _uploadFileByPath passes File object directly, no second picker
- *   - Web search toggle pill (globe icon, per-message, resets after send)
- *   - KaTeX ignoredTags: ['code', 'pre', 'script'] + ignoredClasses: ['hljs']
- *   - RTL language support: dir="auto" on message bubbles
- *   - ban_check SSE event: warning banner for banned patterns
- *   - web_search SSE event: "X results injected" indicator
- *   - Project home recents use ?project_id= filter
- *   - saveMemory uses modal textarea, not prompt()
- *   - Global Escape handler integrated
+ * ReAct patch (v0.7.0):
+ *   - approval_required SSE event: pauses stream, shows approval card
+ *   - tool_executing SSE event: shows spinner indicator per tool
+ *   - tool_result SSE event: marks tool indicator as complete
+ *   - search_query SSE event: shows toast with exact query string
+ *   - _resolveApproval(): POSTs to /api/chat/resolve_tool, resumes stream
+ *   - _showApprovalCard(): renders Approve/Deny UI inline in chat
  */
 
 const lincolnChat = (() => {
@@ -271,8 +267,6 @@ const lincolnChat = (() => {
           project_id:     _activeProjectId,
           use_rag:        !!_activeProjectId,
           use_web_search: useWebSearch,
-          // v0.7.0: multi-file — send array; backend accepts both file_ids[]
-          // and legacy file_id for backwards compat
           file_ids:       fileIds.length ? fileIds : null,
           file_id:        fileIds.length === 1 ? fileIds[0] : null,
           think_mode:     _thinkMode,
@@ -327,9 +321,35 @@ const lincolnChat = (() => {
             }
 
             if (event.type === 'web_search') {
-              // Show transient indicator that web results were injected
               _showWebSearchIndicator(assistantEl, event.result_count || 0);
             }
+
+            // ── ReAct tool events ─────────────────────────────────────────
+
+            if (event.type === 'tool_executing') {
+              _showToolExecutingIndicator(assistantEl, event.tool_name, event.arguments);
+            }
+
+            if (event.type === 'tool_result') {
+              _updateToolExecutingIndicator(assistantEl, event.tool_name, event.result_preview);
+            }
+
+            if (event.type === 'search_query') {
+              _showToast(`🔍 Searching: "${event.query}"`, 'info');
+            }
+
+            if (event.type === 'approval_required') {
+              cursor.remove();
+              _setStreaming(false);
+              _showApprovalCard(
+                assistantEl, event, _sessionId,
+                lincolnSettings?.activeModel || 'qwen3.5:9b',
+                _activeProjectId, _thinkMode
+              );
+              return;
+            }
+
+            // ── End ReAct tool events ─────────────────────────────────────
 
             if (event.type === 'ban_check' && event.violations?.length) {
               _showBanCheckWarning(assistantEl, event.violations);
@@ -415,19 +435,223 @@ const lincolnChat = (() => {
     body.appendChild(banner);
   }
 
+  // ── ReAct: Tool executing indicator ──────────────────────────────────────
+
+  function _showToolExecutingIndicator(messageEl, toolName, args) {
+    const body = messageEl.querySelector('.message-body');
+    if (!body) return;
+
+    body.querySelector('.tool-executing-indicator')?.remove();
+
+    const icons = {
+      rag_query:       'ti-database-search',
+      read_file:       'ti-file-code',
+      web_search:      'ti-world-search',
+      execute_python:  'ti-brand-python',
+      execute_fortran: 'ti-cpu',
+      write_file:      'ti-file-pencil',
+      run_aider:       'ti-terminal-2',
+    };
+
+    const el = document.createElement('div');
+    el.className    = 'tool-executing-indicator';
+    el.dataset.tool = toolName;
+    el.innerHTML    = `
+      <div class="tool-indicator-inner">
+        <i class="ti ${icons[toolName] || 'ti-tool'} tool-indicator-icon"></i>
+        <span class="tool-indicator-name">${_esc(toolName.replace(/_/g, ' '))}</span>
+        <span class="tool-indicator-spinner"></span>
+      </div>
+    `;
+    body.insertBefore(el, body.querySelector('.message-bubble'));
+  }
+
+  function _updateToolExecutingIndicator(messageEl, toolName, resultPreview) {
+    const el = messageEl.querySelector(`.tool-executing-indicator[data-tool="${toolName}"]`);
+    if (!el) return;
+    el.querySelector('.tool-indicator-spinner')?.remove();
+    el.querySelector('.tool-indicator-inner')?.insertAdjacentHTML(
+      'beforeend',
+      `<i class="ti ti-check tool-indicator-done"></i>`
+    );
+    setTimeout(() => el.classList.add('tool-indicator-collapsed'), 2000);
+  }
+
+  // ── ReAct: Approval card ──────────────────────────────────────────────────
+
+  function _showApprovalCard(messageEl, event, sessionId, model, projectId, thinkMode) {
+    const body = messageEl.querySelector('.message-body');
+    if (!body) return;
+
+    const toolName = event.tool_name;
+    const args     = event.arguments;
+    const tier     = event.tier || 'write';
+    const reason   = event.reason || 'This action requires your approval.';
+
+    let argsDisplay = JSON.stringify(args, null, 2);
+    if (argsDisplay.length > 800) argsDisplay = argsDisplay.slice(0, 800) + '\n... (truncated)';
+
+    const headerContent = toolName === 'web_search'
+      ? `<div class="approval-search-query">
+           <i class="ti ti-world-search"></i>
+           <span>${_esc(args.query || '')}</span>
+         </div>`
+      : `<pre class="approval-args-pre">${_esc(argsDisplay)}</pre>`;
+
+    const tierLabel = tier === 'search' ? '🔍 Web Search Request' : '⚠️ Action Required';
+    const tierClass = tier === 'search' ? 'approval-card-search' : 'approval-card-write';
+
+    const safeModel    = _esc(model || 'qwen3.5:9b');
+    const safeThink    = _esc(thinkMode || 'normal');
+    const safeProject  = projectId != null ? projectId : 'null';
+
+    const card = document.createElement('div');
+    card.className = `approval-card ${tierClass}`;
+    card.innerHTML = `
+      <div class="approval-card-header">
+        <strong>${tierLabel}</strong>
+        <span class="approval-tool-name">${_esc(toolName.replace(/_/g, ' '))}</span>
+      </div>
+      <div class="approval-card-reason">${_esc(reason)}</div>
+      ${headerContent}
+      <div class="approval-card-actions">
+        <button class="approval-btn-approve"
+          onclick="lincolnChat._resolveApproval(true, ${sessionId}, '${safeModel}', ${safeProject}, '${safeThink}', this.closest('.approval-card'))">
+          <i class="ti ti-check"></i> Approve
+        </button>
+        <button class="approval-btn-deny"
+          onclick="lincolnChat._resolveApproval(false, ${sessionId}, '${safeModel}', ${safeProject}, '${safeThink}', this.closest('.approval-card'))">
+          <i class="ti ti-x"></i> Deny
+        </button>
+      </div>
+    `;
+
+    const bubble = body.querySelector('.message-bubble');
+    if (bubble) body.insertBefore(card, bubble);
+    else body.appendChild(card);
+  }
+
+  // ── ReAct: Resolve approval ───────────────────────────────────────────────
+
+  async function _resolveApproval(approved, sessionId, model, projectId, thinkMode, cardEl) {
+    cardEl?.querySelectorAll('button').forEach(b => b.disabled = true);
+
+    const statusEl = document.createElement('div');
+    statusEl.className   = 'approval-resolving';
+    statusEl.textContent = approved ? 'Executing…' : 'Denied.';
+    cardEl?.appendChild(statusEl);
+
+    if (!approved) {
+      setTimeout(() => cardEl?.classList.add('approval-card-dismissed'), 500);
+    }
+
+    const container      = document.getElementById('chatMessages');
+    const lastAssistant  = container?.querySelector('.lincoln-message:last-child');
+    const targetEl       = lastAssistant || _appendAssistantMessage('', []);
+    const bubbleEl       = targetEl.querySelector('.message-bubble');
+
+    _setStreaming(true);
+    const cursor = document.createElement('span');
+    cursor.className = 'streaming-cursor';
+    if (bubbleEl) bubbleEl.appendChild(cursor);
+
+    let fullText = '';
+
+    try {
+      const response = await fetch('/api/chat/resolve_tool', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          session_id: sessionId,
+          approved:   approved,
+          model:      model,
+          project_id: projectId,
+          think_mode: thinkMode,
+        }),
+      });
+
+      const reader  = response.body.getReader();
+      const decoder = new TextDecoder();
+      let   buffer  = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+
+            if (event.type === 'token' && bubbleEl) {
+              fullText += event.content;
+              bubbleEl.textContent = fullText;
+              bubbleEl.appendChild(cursor);
+              _scrollToBottom();
+            }
+
+            if (event.type === 'tool_executing') {
+              _showToolExecutingIndicator(targetEl, event.tool_name, event.arguments);
+            }
+
+            if (event.type === 'tool_result') {
+              _updateToolExecutingIndicator(targetEl, event.tool_name, event.result_preview);
+            }
+
+            if (event.type === 'tool_denied') {
+              _showToast(`Tool denied: ${event.tool_name}`, 'info');
+            }
+
+            if (event.type === 'approval_required') {
+              // Nested approval — another gated tool in the same ReAct chain
+              cursor.remove();
+              _setStreaming(false);
+              _showApprovalCard(targetEl, event, sessionId, model, projectId, thinkMode);
+              return;
+            }
+
+            if (event.type === 'done') {
+              cursor.remove();
+              if (bubbleEl && fullText) {
+                _renderFinalMessage(bubbleEl, fullText, [], targetEl);
+              }
+              cardEl?.classList.add('approval-card-dismissed');
+              _scrollToBottom();
+              if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadHistory();
+            }
+
+            if (event.type === 'error') {
+              cursor.remove();
+              if (bubbleEl) {
+                bubbleEl.textContent = `Error: ${event.message}`;
+                bubbleEl.style.color = 'var(--text-danger)';
+              }
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (err) {
+      cursor.remove();
+      if (bubbleEl) {
+        bubbleEl.textContent = `Connection error: ${err.message}`;
+        bubbleEl.style.color = 'var(--text-danger)';
+      }
+    }
+
+    _setStreaming(false);
+  }
+
   // ── File upload ───────────────────────────────────────────────────────────
 
   function openFileAttach() {
-    // Try the sidebar file browser first
     if (typeof lincolnSidebar !== 'undefined' && lincolnSidebar.openFileBrowser) {
       lincolnSidebar.openFileBrowser('file', async (fileOrPath) => {
-        // BUG FIX (B4): if sidebar returns a File object, use it directly.
-        // Previously this function ignored fileOrPath and opened a new picker.
         if (fileOrPath instanceof File) {
           await _uploadFileBlob(fileOrPath);
         } else if (typeof fileOrPath === 'string' && fileOrPath) {
-          // Path string from folder browser — show native picker pre-navigated
-          // (browsers don't allow programmatic file selection from a path)
           _openNativePicker();
         } else {
           _openNativePicker();
@@ -441,11 +665,10 @@ const lincolnChat = (() => {
   function _openNativePicker() {
     const input    = document.createElement('input');
     input.type     = 'file';
-    input.multiple = true;   // v0.7.0: allow selecting multiple files at once
+    input.multiple = true;
     input.accept   = _buildAcceptString();
     input.onchange = async () => {
       if (!input.files || !input.files.length) return;
-      // Upload each selected file in sequence
       for (const file of Array.from(input.files)) {
         await _uploadFileBlob(file);
       }
@@ -475,15 +698,11 @@ const lincolnChat = (() => {
     formData.append('file', file);
     if (_sessionId) formData.append('session_id', String(_sessionId));
 
-    // For image files, check if vision mode is wanted
     const ext     = '.' + file.name.split('.').pop().toLowerCase();
     const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'].includes(ext);
 
     let uploadUrl = '/api/files/upload';
-    if (isImage) {
-      // Default to OCR; user can switch in the pending chip
-      uploadUrl += '?mode=ocr&lang=eng';
-    }
+    if (isImage) uploadUrl += '?mode=ocr&lang=eng';
 
     try {
       const res  = await fetch(uploadUrl, { method: 'POST', body: formData });
@@ -494,7 +713,6 @@ const lincolnChat = (() => {
         return;
       }
 
-      // v0.7.0: push to array, keep legacy single-file vars synced
       _pendingFiles.push({
         id:      data.file_id,
         name:    data.filename,
@@ -521,10 +739,7 @@ const lincolnChat = (() => {
       if (inputArea) inputArea.prepend(chip);
     }
 
-    if (_pendingFiles.length === 0) {
-      chip.remove();
-      return;
-    }
+    if (_pendingFiles.length === 0) { chip.remove(); return; }
 
     if (_pendingFiles.length === 1) {
       const f  = _pendingFiles[0];
@@ -541,7 +756,6 @@ const lincolnChat = (() => {
         </button>
       `;
     } else {
-      // Multi-file summary chip
       const totalKb = Math.round(_pendingFiles.reduce((s, f) => s + (f.size || 0), 0) / 1024 * 10) / 10;
       const names   = _pendingFiles.map(f => _esc(f.name)).join(', ');
       chip.innerHTML = `
@@ -556,11 +770,9 @@ const lincolnChat = (() => {
   }
 
   function _switchImageMode() {
-    // Toggle OCR/Vision mode for the pending image file
     _showToast('Vision mode: re-attach the image and use ?mode=vision in the URL field', 'info');
   }
 
-  // Public + private clear — both clear the full array
   function clearPendingFile() { _clearPendingFiles(); }
 
   function _clearPendingFiles() {
@@ -570,10 +782,9 @@ const lincolnChat = (() => {
     document.getElementById('pendingFileChip')?.remove();
   }
 
-  // Kept for any internal callers that used the old name
   function _clearPendingFile() { _clearPendingFiles(); }
 
-  // ── Context strip (startup memory) ───────────────────────────────────────
+  // ── Context strip ─────────────────────────────────────────────────────────
 
   async function _loadContextStrip() {
     try {
@@ -595,10 +806,9 @@ const lincolnChat = (() => {
     document.getElementById('contextStrip')?.style.setProperty('display', 'none');
   }
 
-  // ── Save memory (modal textarea instead of prompt()) ──────────────────────
+  // ── Save memory ───────────────────────────────────────────────────────────
 
   async function saveMemory() {
-    // Open a modal textarea for memory input (better UX than browser prompt())
     _openMemoryModal();
   }
 
@@ -656,7 +866,6 @@ const lincolnChat = (() => {
       if (res.ok) {
         document.getElementById('memoryInputModal')?.remove();
         _showToast('Session saved to memory', 'success');
-        // Reload memory panel if open
         if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadMemory?.();
       } else {
         _showToast('Failed to save memory', 'error');
@@ -697,7 +906,6 @@ const lincolnChat = (() => {
         hljs.highlightElement(block);
       });
     }
-    // BUG FIX: KaTeX now excludes code blocks to prevent math rendering inside them
     if (typeof renderMathInElement !== 'undefined') {
       renderMathInElement(element, {
         delimiters: [
@@ -706,10 +914,9 @@ const lincolnChat = (() => {
           { left: '$',  right: '$',    display: false },
           { left: '\\(', right: '\\)', display: false },
         ],
-        throwOnError:  false,
-        output:        'html',
-        // FIX B: never render math inside code/pre/script elements
-        ignoredTags:   ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
+        throwOnError:   false,
+        output:         'html',
+        ignoredTags:    ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
         ignoredClasses: ['hljs', 'language-python', 'language-fortran', 'language-r',
                          'language-matlab', 'language-julia', 'language-maple'],
       });
@@ -723,8 +930,6 @@ const lincolnChat = (() => {
     if (!container) return;
     const el = document.createElement('div');
     el.className = 'lincoln-message user-message';
-
-    // RTL detection: add dir="auto" for natural Urdu/Arabic/Russian rendering
     el.innerHTML = `
       <div class="message-avatar user-avatar">U</div>
       <div class="message-body">
@@ -815,7 +1020,6 @@ const lincolnChat = (() => {
     const recentsEl = document.getElementById('projectHomeRecents');
     if (!recentsEl || !_activeProjectId) return;
     try {
-      // Use project_id filter (new in v0.6.0 API)
       const res      = await fetch(`/api/history?project_id=${_activeProjectId}`);
       const sessions = await res.json();
       const mine     = sessions.slice(0, 8);
@@ -842,40 +1046,28 @@ const lincolnChat = (() => {
   }
 
   // ── Global Escape handler ─────────────────────────────────────────────────
-  // Priority: modal overlay → think dropdown → web search pill → canvas selection
 
   function _setupGlobalEscape() {
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
 
-      // Never steal Escape from the chat input's own handling
       const input = document.getElementById('chatInput');
-      if (document.activeElement === input) {
-        input.blur();
-        return;
-      }
+      if (document.activeElement === input) { input.blur(); return; }
 
-      // 1. Close any open modal
       const modal = document.querySelector('.modal-overlay[style*="flex"]');
       if (modal) { modal.style.display = 'none'; return; }
 
-      // 2. Close any open overlay (new project, settings, project settings)
       const overlay = document.querySelector('.overlay[style*="flex"]');
       if (overlay) { overlay.style.display = 'none'; return; }
 
-      // 3. Close think dropdown
       if (_thinkDropdownOpen) { closeThinkDropdown(); return; }
 
-      // 4. Clear canvas selection
       if (typeof lincolnCanvas !== 'undefined' && lincolnCanvas.hasSelection?.()) {
-        lincolnCanvas.clearSelection();
-        return;
+        lincolnCanvas.clearSelection(); return;
       }
 
-      // 5. Clear sidebar history selection
       if (typeof lincolnSidebar !== 'undefined' && lincolnSidebar.hasSelection?.()) {
-        lincolnSidebar.clearSelection();
-        return;
+        lincolnSidebar.clearSelection(); return;
       }
     });
   }
@@ -952,7 +1144,6 @@ const lincolnChat = (() => {
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   }
 
-  // Language → extension map (expanded in v0.6.0)
   const _LANG_EXT = {
     python: '.py',      fortran: '.f90',    javascript: '.js',
     typescript: '.ts',  html: '.html',      css: '.css',
@@ -961,7 +1152,6 @@ const lincolnChat = (() => {
     cpp: '.cpp',        c: '.c',            java: '.java',
     rust: '.rs',        go: '.go',          ruby: '.rb',
     text: '.txt',
-    // v0.6.0 additions
     julia: '.jl',       matlab: '.m',       mathematica: '.nb',
     wolfram: '.wl',     rmarkdown: '.Rmd',  sas: '.sas',
     stata: '.do',       gams: '.gms',       ampl: '.ampl',
@@ -1035,7 +1225,12 @@ const lincolnChat = (() => {
     toggleWebSearch,
     showWelcome,
     showProjectHome,
-    showToast: _showToast,
+    showToast:                    _showToast,
+    // ReAct approval — called by inline onclick handlers in approval cards
+    _resolveApproval,
+    _showApprovalCard,
+    _showToolExecutingIndicator,
+    _updateToolExecutingIndicator,
   };
 
 })();

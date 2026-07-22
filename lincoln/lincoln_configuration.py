@@ -81,6 +81,26 @@ UPLOADS_DIR    = DATA_DIR / "uploads"
 
 OLLAMA_BASE_URL = _optional("OLLAMA_API_BASE", "http://localhost:11434")
 
+# ── Google Custom Search API (web search fallback) ────────────────────────────
+# Used as fallback when DuckDuckGo rate-limits or times out.
+# SafeSearch is hardcoded to 'active' in lincoln_web_search.py — these keys
+# only control which account/engine is used, not safety settings.
+#
+# Free tier: 100 queries/day. No billing setup needed for under 100/day.
+# Setup: console.cloud.google.com → Custom Search JSON API → create key
+#         cse.google.com → new engine → enable "Search the entire web" → copy cx
+
+GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+GOOGLE_CSE_ID:  str = os.getenv("GOOGLE_CSE_ID",  "")
+
+
+# ── Startup summary addition ──────────────────────────────────────────────────
+# Add these lines to your existing startup_summary() or print block:
+#
+#   google_status = "configured" if GOOGLE_API_KEY and GOOGLE_CSE_ID else "not configured (DDG only)"
+#   print(f"  Google Search : {google_status}")
+#
+# This prints at launch so you can confirm keys are loaded without exposing them.
 
 # ── LLM model ─────────────────────────────────────────────────────────────────
 
@@ -128,6 +148,23 @@ _ENV_ADMIN_ALLOWLIST = {
     "LINCOLN_UI_PORT",
     "LINCOLN_VRAM_GB",
 }
+
+"""
+lincoln_configuration.py  — v0.7.0 ADDITIONS ONLY
+===================================================
+Add these lines to your existing lincoln_configuration.py,
+alongside the existing OLLAMA_BASE_URL, LLM_MODEL etc. entries.
+
+Also add GOOGLE_API_KEY and GOOGLE_CSE_ID to your .env file:
+
+  GOOGLE_API_KEY=your_api_key_here
+  GOOGLE_CSE_ID=your_search_engine_id_here
+
+These are read at startup and printed in the startup summary
+(masked so they don't appear in full in terminal output).
+"""
+
+import os
 
 
 def write_env_key(key: str, value: str) -> bool:

@@ -493,3 +493,181 @@ def build_messages_with_rag_context(
     messages.append({"role": "user", "content": user_question})
 
     return messages
+
+"""
+lincoln_ollama_service.py  — v0.7.0 ADDITIONS ONLY
+====================================================
+Append this entire block to the bottom of your existing
+lincoln_ollama_service.py. All existing functions remain unchanged.
+
+This adds stream_chat_with_tools() — the native tool-calling variant of
+stream_chat(). It yields structured dicts instead of raw strings so the
+ReAct loop in lincoln_routes_chat.py can detect and handle tool calls.
+
+The existing stream_chat() is kept untouched for all non-agent code paths
+(e.g. canvas execution, direct LLM calls from other services).
+"""
+
+from typing import Generator
+
+
+# ── Streamed event types from stream_chat_with_tools() ───────────────────────
+#
+#  {"type": "token",     "content": str}
+#      Normal text token from the LLM. Accumulate these for the final response.
+#
+#  {"type": "think",     "content": str}
+#      Thinking/reasoning token (qwen3 only, when think=True).
+#
+#  {"type": "think_end"}
+#      Reasoning block complete, main response beginning.
+#
+#  {"type": "tool_call", "tool_name": str, "tool_call_id": str, "arguments": dict}
+#      LLM has requested a tool. ReAct loop must handle this.
+#      After this event the stream ends — Ollama sets done=True.
+#
+#  {"type": "done"}
+#      Stream complete, no tool call was made.
+#
+#  {"type": "error",     "message": str}
+#      Something went wrong.
+
+
+def stream_chat_with_tools(
+    messages:    list[dict],
+    model:       str,
+    tools:       list[dict] | None = None,
+    temperature: float = 0.7,
+    timeout:     int | None = None,
+    think:       bool = False,
+) -> Generator[dict, None, None]:
+    """
+    Stream a chat response from Ollama with native tool-calling support.
+
+    Unlike stream_chat() which yields raw strings, this yields structured
+    event dicts so the ReAct loop can detect tool calls and route them
+    through the approval gate.
+
+    Args:
+        messages    : Full message list including system prompt and history.
+        model       : Ollama model name.
+        tools       : List of Ollama-compatible tool schema dicts.
+                      Pass [] or None to disable tool calling entirely.
+        temperature : Sampling temperature.
+        timeout     : Request timeout in seconds (reads from DB if None).
+        think       : Enable chain-of-thought reasoning (qwen3 models only).
+
+    Yields:
+        Structured event dicts (see event types above).
+    """
+    import json as _json
+    import requests as _requests
+
+    if timeout is None:
+        timeout = _get_timeout()
+
+    payload: dict = {
+        "model":    model,
+        "messages": messages,
+        "stream":   True,
+        "options":  {
+            "temperature": temperature,
+            "num_ctx":     resolve_num_ctx_for_request(model, messages),
+            "num_predict": -1,
+        },
+    }
+
+    if tools:
+        payload["tools"] = tools
+
+    if _is_thinking_model(model):
+        payload["think"] = think
+
+    # Ollama streams tool calls differently from text responses.
+    # When the model decides to call a tool:
+    #   - chunk["message"]["tool_calls"] is populated
+    #   - chunk["message"]["content"] may be empty or contain preamble text
+    #   - chunk["done"] is True on the final chunk
+    #
+    # We accumulate tool_calls across chunks (some models split them)
+    # and yield a single tool_call event when done=True.
+
+    accumulated_tool_calls: list[dict] = []
+    in_think_block = False
+
+    try:
+        with _requests.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json=payload,
+            stream=True,
+            timeout=timeout,
+        ) as response:
+            response.raise_for_status()
+
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                try:
+                    chunk = _json.loads(line.decode("utf-8"))
+                except (_json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+
+                message = chunk.get("message", {})
+
+                # ── Thinking tokens (qwen3 reasoning mode) ────────────────
+                if think:
+                    thinking_token = chunk.get("thinking", "")
+                    if thinking_token:
+                        if not in_think_block:
+                            in_think_block = True
+                        yield {"type": "think", "content": thinking_token}
+
+                    if in_think_block and message.get("content"):
+                        in_think_block = False
+                        yield {"type": "think_end"}
+
+                # ── Tool call chunks ──────────────────────────────────────
+                tool_calls_in_chunk = message.get("tool_calls", [])
+                if tool_calls_in_chunk:
+                    accumulated_tool_calls.extend(tool_calls_in_chunk)
+
+                # ── Text content tokens ───────────────────────────────────
+                token = message.get("content", "")
+                if token and not tool_calls_in_chunk:
+                    # Only yield text tokens if this chunk is NOT a tool call.
+                    # Some models emit preamble text before the tool call —
+                    # we stream that normally.
+                    yield {"type": "token", "content": token}
+
+                # ── Stream complete ───────────────────────────────────────
+                if chunk.get("done", False):
+                    if in_think_block:
+                        yield {"type": "think_end"}
+
+                    if accumulated_tool_calls:
+                        # Yield one tool_call event per requested tool.
+                        # In practice Qwen/Gemma request one tool at a time.
+                        for tc in accumulated_tool_calls:
+                            func      = tc.get("function", {})
+                            tool_name = func.get("name", "")
+                            raw_args  = func.get("arguments", {})
+
+                            # arguments may arrive as a JSON string or dict
+                            if isinstance(raw_args, str):
+                                try:
+                                    raw_args = _json.loads(raw_args)
+                                except _json.JSONDecodeError:
+                                    raw_args = {"raw": raw_args}
+
+                            yield {
+                                "type":         "tool_call",
+                                "tool_name":    tool_name,
+                                "tool_call_id": tc.get("id", f"tc_{tool_name}"),
+                                "arguments":    raw_args,
+                            }
+                    else:
+                        yield {"type": "done"}
+                    break
+
+    except Exception as e:
+        yield {"type": "error", "message": str(e)}

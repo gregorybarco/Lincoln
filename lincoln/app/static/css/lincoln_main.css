@@ -1936,3 +1936,192 @@ body { font-family: var(--ui-font); }
         animation: lincoln-spin 0.8s linear infinite;
         display: inline-block;
     }
+
+/* ── ReAct: Tool executing indicator ────────────────────────────────────────── */
+
+.tool-executing-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    margin-bottom: 6px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    transition: opacity 0.3s ease, max-height 0.3s ease;
+}
+
+.tool-indicator-inner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tool-indicator-icon {
+    font-size: 13px;
+    color: var(--accent);
+}
+
+.tool-indicator-name {
+    text-transform: capitalize;
+}
+
+.tool-indicator-spinner {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    border-top-color: transparent;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+.tool-indicator-done {
+    color: #22c55e;
+    font-size: 13px;
+}
+
+.tool-indicator-collapsed {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+/* ── ReAct: Approval card ────────────────────────────────────────────────────── */
+
+.approval-card {
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    border: 1px solid var(--border);
+}
+
+.approval-card-write {
+    background: color-mix(in srgb, #f59e0b 8%, var(--surface-1));
+    border-color: color-mix(in srgb, #f59e0b 35%, transparent);
+}
+
+.approval-card-search {
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface-1));
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.approval-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.approval-tool-name {
+    font-size: 11px;
+    font-weight: normal;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.approval-card-reason {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+
+.approval-args-pre {
+    font-size: 11px;
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 8px;
+    overflow-x: auto;
+    max-height: 180px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-bottom: 10px;
+    font-family: monospace;
+}
+
+.approval-search-query {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 8px 10px;
+    background: var(--surface-2);
+    border-radius: 6px;
+    margin-bottom: 10px;
+}
+
+.approval-card-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.approval-btn-approve {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    background: var(--accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: opacity 0.15s;
+}
+
+    .approval-btn-approve:hover {
+        opacity: 0.85;
+    }
+
+    .approval-btn-approve:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+.approval-btn-deny {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    font-size: 13px;
+    background: var(--surface-2);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: background 0.15s;
+}
+
+    .approval-btn-deny:hover {
+        background: var(--surface-3);
+    }
+
+    .approval-btn-deny:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+.approval-card-dismissed {
+    opacity: 0.4;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+}
+
+.approval-resolving {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 8px;
+    font-style: italic;
+}
+
+/* spin keyframe (may already exist in your CSS — safe to have twice) */
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

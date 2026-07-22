@@ -859,3 +859,109 @@ def delete_all_memory_entries():
     with _get_connection() as connection:
         connection.execute("DELETE FROM lincoln_memory_entries")
         connection.commit()
+
+
+"""
+lincoln_database.py  — v0.7.0 ADDITIONS ONLY
+=============================================
+These are the additions to append to the bottom of your existing
+lincoln_database.py. Do NOT replace the whole file.
+
+Add two things:
+
+1. Add this line to the _SCHEMA string (inside the triple-quoted block,
+   after the lincoln_system_prompts table definition):
+
+   ---- PASTE INTO _SCHEMA ----
+
+CREATE TABLE IF NOT EXISTS lincoln_pending_tool_calls (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   INTEGER NOT NULL,
+    tool_name    TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    arguments    TEXT NOT NULL,
+    created_at   TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+   ---- END PASTE ----
+
+2. Append the three functions below to the bottom of lincoln_database.py.
+   No other changes needed.
+"""
+
+import json
+
+# ── Pending tool calls (ReAct human-in-the-loop gate) ────────────────────────
+# When the ReAct loop encounters a WRITE_TOOL or SEARCH_TOOL that requires
+# approval, it saves the pending call here, pauses the SSE stream, and sends
+# an approval_required event to the UI.
+#
+# When the user clicks Approve or Deny, /api/chat/resolve_tool loads the
+# pending call, executes or skips the tool, appends the result to history,
+# and re-enters the ReAct loop to get the final LLM response.
+
+
+def save_pending_tool_call(
+    session_id:   int,
+    tool_name:    str,
+    tool_call_id: str,
+    arguments:    dict,
+) -> None:
+    """
+    Save a pending tool call awaiting user approval.
+    Only one pending call per session is supported at a time.
+    Any existing pending call for this session is replaced.
+    """
+    from lincoln.lincoln_database import _get_connection, _now
+
+    with _get_connection() as connection:
+        # Clear any stale pending call for this session first
+        connection.execute(
+            "DELETE FROM lincoln_pending_tool_calls WHERE session_id = ?",
+            (session_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO lincoln_pending_tool_calls
+                (session_id, tool_name, tool_call_id, arguments, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (session_id, tool_name, tool_call_id, json.dumps(arguments), _now()),
+        )
+        connection.commit()
+
+
+def get_pending_tool_call(session_id: int) -> dict | None:
+    """
+    Retrieve the pending tool call for a session.
+    Returns None if no pending call exists.
+    """
+    from lincoln.lincoln_database import _get_connection
+
+    with _get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM lincoln_pending_tool_calls WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    result = dict(row)
+    result["arguments"] = json.loads(result["arguments"])
+    return result
+
+
+def clear_pending_tool_call(session_id: int) -> None:
+    """
+    Remove the pending tool call for a session after it has been resolved
+    (approved or denied).
+    """
+    from lincoln.lincoln_database import _get_connection
+
+    with _get_connection() as connection:
+        connection.execute(
+            "DELETE FROM lincoln_pending_tool_calls WHERE session_id = ?",
+            (session_id,),
+        )
+        connection.commit()
