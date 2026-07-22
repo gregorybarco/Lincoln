@@ -194,3 +194,68 @@ def remove_all_memory():
     """Delete all memory entries."""
     delete_all_memory_entries()
     return "", 204
+
+@history_blueprint.route("/api/history/memory/auto", methods=["POST"])
+def auto_save_memory():
+    """
+    Spawns a background thread to handle Ollama memory extraction asynchronously,
+    returning an immediate 200 OK to the UI to prevent hanging.
+    """
+    import threading
+    from lincoln.lincoln_configuration import DB_PATH, LLM_MODEL
+
+    data = request.get_json(silent=True) or {}
+    chat_history = data.get("history") or data.get("context") or []
+    raw_project_id = data.get("project_id")
+    project_id = int(raw_project_id) if raw_project_id is not None and str(raw_project_id).isdigit() else None
+
+    def _background_extract(history_data, proj_id):
+        try:
+            import sqlite3
+            import ollama
+
+            extraction_prompt = (
+                "Analyze the following chat history and extract key architectural facts, "
+                "user preferences, and code patterns into a concise bulleted list. "
+                "Output only the extracted facts.\n\n" + str(history_data)
+            )
+
+            response = ollama.chat(
+                model=LLM_MODEL,
+                messages=[{"role": "user", "content": extraction_prompt}]
+            )
+            extracted_facts = response.get("message", {}).get("content", "").strip()
+
+            if not extracted_facts:
+                extracted_facts = "No facts extracted from session history."
+
+            # Use direct thread-safe connection to persist memory
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS memory_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    project_id INTEGER,
+                    tag TEXT DEFAULT 'session_summary',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute(
+                "INSERT INTO memory_entries (content, project_id, tag) VALUES (?, ?, ?)",
+                (extracted_facts, proj_id, "session_summary")
+            )
+            conn.commit()
+            conn.close()
+        except Exception as bg_err:
+            print(f"[Lincoln Background Memory Error]: {bg_err}")
+
+    # Spawn thread so UI returns instantly
+    t = threading.Thread(target=_background_extract, args=(chat_history, project_id))
+    t.daemon = True
+    t.start()
+
+    return jsonify({
+        "status": "ok",
+        "message": "Memory extraction queued in background."
+    }), 200

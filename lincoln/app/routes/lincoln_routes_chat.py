@@ -312,8 +312,11 @@ def _react_loop(
             etype = event["type"]
 
             if etype == "token":
-                accumulated_text.append(event["content"])
-                yield f"data: {json.dumps({'type': 'token', 'content': event['content']})}\n\n"
+                content = event["content"]
+                if isinstance(content, str):
+                    content = content.encode("ascii", errors="ignore").decode("ascii")
+                accumulated_text.append(content)
+                yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
 
             elif etype == "think":
                 yield f"data: {json.dumps({'type': 'token', 'content': event['content']})}\n\n"
