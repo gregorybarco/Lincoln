@@ -20,7 +20,7 @@ Rules:
 
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from lincoln.lincoln_configuration import CHROMA_DB_PATH, DB_PATH
@@ -146,6 +146,11 @@ _DEFAULT_SETTINGS = {
     "oneapi_path":                  "C:\\Program Files (x86)\\Intel\\oneAPI",
     # Aider
     "aider_launch_mode":            "cmd",
+    # Version (DB-backed so it is editable from Settings UI without touching __init__.py)
+    "lincoln_version":              "0.7.0",
+    "lincoln_codename":             "Navigator",
+    # Web search behaviour
+    "web_search_always_on":         "false",
 }
 
 
@@ -305,7 +310,12 @@ def get_active_system_prompt(project_id: int | None = None) -> str:
         for row in rows:
             parts.append(row["content"])
 
-    return "\n\n---\n\n".join(parts) if parts else "You are Lincoln, a local AI assistant."
+    # Always inject the current date so the LLM knows when it is.
+    # This prevents stale 2024-2025 date references in web search queries.
+    date_line = f"Today's date: {date.today().isoformat()}"
+    parts.insert(0, date_line)
+
+    return "\n\n---\n\n".join(parts) if parts else f"{date_line}\n\nYou are Lincoln, a local AI assistant."
 
 
 def create_system_prompt(

@@ -1,5 +1,5 @@
 """
-Lincoln Configuration Loader  v0.6.0
+Lincoln Configuration Loader  v0.7.0
 ======================================
 Loads and validates Lincoln's infrastructure configuration from .env.
 
@@ -10,11 +10,13 @@ Owns:
   - RAG chunk size
   - Web UI host and port
   - VRAM cap for context window sizing
+  - Google Custom Search API keys (fallback search provider)
 
 Does NOT own:
   - Project paths, names, or ChromaDB collection names (lincoln_database.py)
   - Chat history, session state, or UI preferences (lincoln_database.py)
   - User-editable settings like top_k, history_limit (lincoln_database.py)
+  - Lincoln version string or codename (lincoln_database.py lincoln_settings table)
 
 Rule: No other file in Lincoln ever calls os.getenv() directly.
       All environment access flows through this module.
@@ -29,13 +31,13 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# ── Locate and load .env ──────────────────────────────────────────────────────
+# -- Locate and load .env -----------------------------------------------------
 
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_ENV_PATH)
 
 
-# ── Internal helpers ──────────────────────────────────────────────────────────
+# -- Internal helpers ----------------------------------------------------------
 
 def _require(key: str) -> str:
     val = os.getenv(key, "").strip()
@@ -65,7 +67,7 @@ def _optional_int(key: str, default: int) -> int:
         return default
 
 
-# ── Filesystem paths ──────────────────────────────────────────────────────────
+# -- Filesystem paths ----------------------------------------------------------
 
 LINCOLN_ROOT   = Path(__file__).resolve().parent.parent
 DATA_DIR       = LINCOLN_ROOT / "data"
@@ -77,66 +79,60 @@ BIN_DIR        = LINCOLN_ROOT / "bin"
 UPLOADS_DIR    = DATA_DIR / "uploads"
 
 
-# ── Ollama connection ─────────────────────────────────────────────────────────
+# -- Ollama connection ---------------------------------------------------------
 
 OLLAMA_BASE_URL = _optional("OLLAMA_API_BASE", "http://localhost:11434")
 
-# ── Google Custom Search API (web search fallback) ────────────────────────────
+
+# -- Google Custom Search API (web search fallback) ----------------------------
 # Used as fallback when DuckDuckGo rate-limits or times out.
-# SafeSearch is hardcoded to 'active' in lincoln_web_search.py — these keys
-# only control which account/engine is used, not safety settings.
+# SafeSearch is hardcoded to 'active' in lincoln_web_search.py.
+# Free tier: 100 queries/day. No billing needed for under 100/day.
+# Setup: console.cloud.google.com -> Custom Search JSON API -> create key
+#         cse.google.com -> new engine -> enable "Search the entire web" -> copy cx
 #
-# Free tier: 100 queries/day. No billing setup needed for under 100/day.
-# Setup: console.cloud.google.com → Custom Search JSON API → create key
-#         cse.google.com → new engine → enable "Search the entire web" → copy cx
+# Both keys are in _ENV_ADMIN_ALLOWLIST and editable from Settings -> Infrastructure.
+# NEVER call os.getenv() for these anywhere else in Lincoln.
 
-GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-GOOGLE_CSE_ID:  str = os.getenv("GOOGLE_CSE_ID",  "")
+GOOGLE_API_KEY: str = _optional("GOOGLE_API_KEY", "")
+GOOGLE_CSE_ID:  str = _optional("GOOGLE_CSE_ID",  "")
 
 
-# ── Startup summary addition ──────────────────────────────────────────────────
-# Add these lines to your existing startup_summary() or print block:
-#
-#   google_status = "configured" if GOOGLE_API_KEY and GOOGLE_CSE_ID else "not configured (DDG only)"
-#   print(f"  Google Search : {google_status}")
-#
-# This prints at launch so you can confirm keys are loaded without exposing them.
-
-# ── LLM model ─────────────────────────────────────────────────────────────────
+# -- LLM model ----------------------------------------------------------------
 
 LLM_MODEL = _require("LINCOLN_LLM_MODEL")
 
 
-# ── Embedding model ───────────────────────────────────────────────────────────
+# -- Embedding model ----------------------------------------------------------
 
 EMBED_MODEL = _require("LINCOLN_EMBED_MODEL")
 
 
-# ── RAG tunables ──────────────────────────────────────────────────────────────
+# -- RAG tunables -------------------------------------------------------------
 
 CHUNK_SIZE    = _optional_int("LINCOLN_CHUNK_SIZE", 512)
 CHUNK_OVERLAP = 50
 DEFAULT_TOP_K = 5
 
 
-# ── Web UI ────────────────────────────────────────────────────────────────────
+# -- Web UI -------------------------------------------------------------------
 
 UI_HOST = "127.0.0.1"
 UI_PORT = _optional_int("LINCOLN_UI_PORT", 5000)
 
 
-# ── VRAM cap -- fixed: use _optional() not os.getenv() directly ──────────────
+# -- VRAM cap -----------------------------------------------------------------
 
 OLLAMA_VRAM_GB = float(_optional("LINCOLN_VRAM_GB", "16"))
 
 
-# ── MLflow (stubbed) ──────────────────────────────────────────────────────────
+# -- MLflow (stubbed) ---------------------------------------------------------
 
 MLFLOW_TRACKING_URI  = _optional("MLFLOW_TRACKING_URI",  "")
 MLFLOW_ARTIFACT_ROOT = _optional("MLFLOW_ARTIFACT_ROOT", "")
 
 
-# ── Admin env write-back ──────────────────────────────────────────────────────
+# -- Admin env write-back -----------------------------------------------------
 
 # Only these keys may be written back to .env from the admin settings UI.
 # This is a hard allowlist -- never write arbitrary keys.
@@ -147,24 +143,9 @@ _ENV_ADMIN_ALLOWLIST = {
     "LINCOLN_CHUNK_SIZE",
     "LINCOLN_UI_PORT",
     "LINCOLN_VRAM_GB",
+    "GOOGLE_API_KEY",
+    "GOOGLE_CSE_ID",
 }
-
-"""
-lincoln_configuration.py  — v0.7.0 ADDITIONS ONLY
-===================================================
-Add these lines to your existing lincoln_configuration.py,
-alongside the existing OLLAMA_BASE_URL, LLM_MODEL etc. entries.
-
-Also add GOOGLE_API_KEY and GOOGLE_CSE_ID to your .env file:
-
-  GOOGLE_API_KEY=your_api_key_here
-  GOOGLE_CSE_ID=your_search_engine_id_here
-
-These are read at startup and printed in the startup summary
-(masked so they don't appear in full in terminal output).
-"""
-
-import os
 
 
 def write_env_key(key: str, value: str) -> bool:
@@ -201,7 +182,7 @@ def write_env_key(key: str, value: str) -> bool:
 def get_all_env_values() -> dict:
     """
     Return all infrastructure .env values for the admin settings panel.
-    All values are displayed in the UI -- nothing hidden.
+    All values displayed in the UI -- nothing hidden.
     """
     return {
         "OLLAMA_API_BASE":    OLLAMA_BASE_URL,
@@ -210,16 +191,44 @@ def get_all_env_values() -> dict:
         "LINCOLN_CHUNK_SIZE": str(CHUNK_SIZE),
         "LINCOLN_UI_PORT":    str(UI_PORT),
         "LINCOLN_VRAM_GB":    str(OLLAMA_VRAM_GB),
+        "GOOGLE_API_KEY":     GOOGLE_API_KEY,
+        "GOOGLE_CSE_ID":      GOOGLE_CSE_ID,
     }
 
 
-# ── Startup diagnostics ───────────────────────────────────────────────────────
+# -- Startup diagnostics ------------------------------------------------------
 
 def print_startup_summary():
-    from lincoln import __version__, __codename__
+    """Print a startup banner with all key configuration values."""
+    # Version comes from DB settings (lincoln_version, lincoln_codename).
+    # Fall back to __init__.py constants if DB is not yet initialised.
+    try:
+        from lincoln.lincoln_database import get_setting
+        version  = get_setting("lincoln_version",  "")
+        codename = get_setting("lincoln_codename", "")
+    except Exception:
+        version  = ""
+        codename = ""
+
+    if not version:
+        try:
+            from lincoln import __version__, __codename__
+            version  = __version__
+            codename = __codename__
+        except Exception:
+            version  = "unknown"
+            codename = ""
+
+    version_str = f"v{version}" + (f" -- {codename}" if codename else "")
+
+    google_status = (
+        "configured (DDG + Google fallback)"
+        if GOOGLE_API_KEY and GOOGLE_CSE_ID
+        else "not configured (DDG only)"
+    )
 
     print(f"\n{'=' * 55}")
-    print(f"  Lincoln v{__version__} -- {__codename__}")
+    print(f"  Lincoln {version_str}")
     print(f"{'=' * 55}")
     print(f"  Ollama      : {OLLAMA_BASE_URL}")
     print(f"  LLM model   : {LLM_MODEL}  (default, overridable in UI)")
@@ -230,6 +239,7 @@ def print_startup_summary():
     print(f"  Database    : {DB_PATH}")
     print(f"  ChromaDB    : {CHROMA_DB_PATH}")
     print(f"  Uploads     : {UPLOADS_DIR}")
+    print(f"  Web search  : {google_status}")
     if MLFLOW_TRACKING_URI:
         print(f"  MLflow      : {MLFLOW_TRACKING_URI}")
     else:

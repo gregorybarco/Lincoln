@@ -2125,3 +2125,153 @@ body { font-family: var(--ui-font); }
         transform: rotate(360deg);
     }
 }
+
+/* ── Settings panel v0.7.1 — wide left-nav tabbed layout ─────────────────── */
+
+/* Override the old 420px width */
+.lincoln-settings-panel {
+    width: min(860px, 96vw) !important;
+    max-height: 90vh;
+}
+
+/* Two-column shell: left nav + right pane */
+.settings-layout {
+    display: flex;
+    flex-direction: row;
+    gap: 0;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+}
+
+/* Left nav column */
+.settings-nav {
+    width: 148px;
+    min-width: 148px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 8px;
+    border-right: 0.5px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+}
+
+.settings-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: var(--radius-md);
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.12s, color 0.12s;
+    border: none;
+    background: none;
+    width: 100%;
+}
+
+    .settings-nav-item i {
+        font-size: 14px;
+        flex-shrink: 0;
+    }
+
+    .settings-nav-item:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
+    }
+
+    .settings-nav-item.active {
+        background: color-mix(in srgb, var(--accent-fill) 10%, transparent);
+        color: var(--accent-text, var(--accent-fill));
+        font-weight: 500;
+    }
+
+/* Right pane container */
+.settings-pane-container {
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+}
+
+/* Individual pane — flex column, scrollable */
+.settings-pane {
+    display: none;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px 20px;
+    overflow-y: auto;
+    height: 100%;
+    box-sizing: border-box;
+}
+
+/* Pane title replaces old section title */
+.settings-pane-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    padding-bottom: 8px;
+    border-bottom: 0.5px solid var(--border);
+    margin-bottom: 4px;
+}
+
+/* Sub-group label within a pane */
+.settings-subgroup-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-muted);
+    padding-top: 4px;
+    border-top: 0.5px solid var(--border);
+}
+
+/* Two-column grid inside a pane */
+.settings-two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+/* Admin action buttons row */
+.infra-action-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.infra-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: var(--radius-md);
+    font-size: 12.5px;
+    font-weight: 500;
+    border: 0.5px solid var(--border-strong);
+    background: var(--bg-page);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.12s;
+}
+
+    .infra-action-btn:hover {
+        background: var(--bg-hover);
+    }
+
+    .infra-action-btn.infra-action-danger {
+        color: var(--text-danger);
+        border-color: var(--text-danger);
+    }
+
+        .infra-action-btn.infra-action-danger:hover {
+            background: color-mix(in srgb, var(--text-danger) 8%, transparent);
+        }
+
+/* Override old settings-body gap — layout now handled by pane */
+.settings-body {
+    padding: 0 !important;
+    gap: 0 !important;
+}

@@ -964,11 +964,14 @@ const lincolnChat = (() => {
       });
     }
     if (typeof renderMathInElement !== 'undefined') {
+      // NOTE: bare $ delimiter is INTENTIONALLY excluded.
+      // Using $ as a math delimiter causes financial text like "$200 billion"
+      // to be incorrectly parsed as LaTeX, concatenating words into broken output.
+      // Only explicit delimiters ($$...$$, \[...\], \(...\)) trigger math rendering.
       renderMathInElement(element, {
         delimiters: [
           { left: '$$', right: '$$',   display: true  },
           { left: '\\[', right: '\\]', display: true  },
-          { left: '$',  right: '$',    display: false },
           { left: '\\(', right: '\\)', display: false },
         ],
         throwOnError:   false,

@@ -1,32 +1,32 @@
 /**
- * Lincoln Settings  v0.6.0  Navigator
+ * Lincoln Settings  v0.7.1
  * ======================================
- * Complete settings panel — nothing hidden, everything editable.
+ * Settings panel -- left-nav tabbed layout, 860px wide.
  *
- * Sections:
- *   Appearance      — theme, font family, font size
- *   Chat            — history limit, show project chats
- *   Prompts & Persona — global system prompt blocks (editable textareas)
- *   RAG & Index     — top-k, snippet chars
- *   Uploads         — max sizes, retention days
- *   Web Search      — enabled default, max results
- *   Build Tools     — nvfortran, f2py flag, WSL distro, Maple, oneAPI (editable)
- *   Models          — Ollama URL, default LLM (admin)
- *   System          — UI port, VRAM cap (admin)
- *   Infrastructure  — .env values, greyed until admin mode unlocked
- *   Status          — live system health
+ * Tabs (left nav):
+ *   Appearance      -- theme, font family
+ *   Chat            -- history limit, show project chats
+ *   Prompts         -- global system prompt blocks (editable textareas)
+ *   RAG             -- top-k, snippet chars
+ *   Uploads         -- max sizes, retention days
+ *   Web Search      -- master toggle, always-on mode
+ *   Build Tools     -- nvfortran, f2py, WSL, Maple, oneAPI, Aider
+ *   Models          -- Ollama timeout
+ *   Infrastructure  -- .env values + version/codename + Google keys + admin actions
+ *   Status          -- live system health
  *
- * Admin mode: toggles a data attribute on the panel. Greyed fields become
- * editable. Each admin field shows a restart/re-index warning.
+ * Admin mode: unlocks Infrastructure fields.
+ * Changes require restart for .env values; DB settings take effect immediately.
  */
 
 const lincolnSettings = (() => {
 
-  let _settings         = {};
-  let _infra            = {};
-  let _adminMode        = false;
-  let _fontsLoaded      = false;
-  let activeModel       = null;
+  let _settings    = {};
+  let _infra       = {};
+  let _adminMode   = false;
+  let _fontsLoaded = false;
+  let _activeTab   = 'appearance';
+  let activeModel  = null;
 
   // ── Open / close ──────────────────────────────────────────────────────────
 
@@ -74,43 +74,82 @@ const lincolnSettings = (() => {
     if (!panel) return;
 
     panel.innerHTML = `
-      ${_sectionAppearance()}
-      ${_sectionChat()}
-      ${_sectionPrompts(prompts)}
-      ${_sectionRAG()}
-      ${_sectionUploads()}
-      ${_sectionWebSearch()}
-      ${_sectionBuildTools()}
-      ${_sectionModels()}
-      ${_sectionInfrastructure()}
-      ${_sectionStatus()}
+      <div class="settings-layout">
+        <nav class="settings-nav">
+          ${_navItem('appearance', 'ti-palette',    'Appearance')}
+          ${_navItem('chat',       'ti-message',    'Chat')}
+          ${_navItem('prompts',    'ti-text',       'Prompts')}
+          ${_navItem('rag',        'ti-database',   'RAG')}
+          ${_navItem('uploads',    'ti-upload',     'Uploads')}
+          ${_navItem('websearch',  'ti-world',      'Web Search')}
+          ${_navItem('buildtools', 'ti-terminal-2', 'Build Tools')}
+          ${_navItem('models',     'ti-cpu',        'Models')}
+          ${_navItem('infra',      'ti-server',     'Infrastructure')}
+          ${_navItem('status',     'ti-activity',   'Status')}
+        </nav>
+        <div class="settings-pane-container">
+          <div class="settings-pane" id="pane-appearance">${_sectionAppearance()}</div>
+          <div class="settings-pane" id="pane-chat">${_sectionChat()}</div>
+          <div class="settings-pane" id="pane-prompts">${_sectionPrompts(prompts)}</div>
+          <div class="settings-pane" id="pane-rag">${_sectionRAG()}</div>
+          <div class="settings-pane" id="pane-uploads">${_sectionUploads()}</div>
+          <div class="settings-pane" id="pane-websearch">${_sectionWebSearch()}</div>
+          <div class="settings-pane" id="pane-buildtools">${_sectionBuildTools()}</div>
+          <div class="settings-pane" id="pane-models">${_sectionModels()}</div>
+          <div class="settings-pane" id="pane-infra">${_sectionInfrastructure()}</div>
+          <div class="settings-pane" id="pane-status">${_sectionStatus()}</div>
+        </div>
+      </div>
     `;
 
     _attachListeners();
     _applyAdminMode();
+    _switchTab(_activeTab);
+  }
+
+  function _navItem(id, icon, label) {
+    return `
+      <button class="settings-nav-item ${_activeTab === id ? 'active' : ''}"
+              id="snav-${id}"
+              onclick="lincolnSettings._switchTab('${id}')">
+        <i class="ti ${icon}"></i>
+        <span>${label}</span>
+      </button>
+    `;
+  }
+
+  function _switchTab(tabId) {
+    _activeTab = tabId;
+    // Hide all panes
+    document.querySelectorAll('.settings-pane').forEach(p => p.style.display = 'none');
+    // Show target pane
+    const target = document.getElementById(`pane-${tabId}`);
+    if (target) target.style.display = 'flex';
+    // Update nav active state
+    document.querySelectorAll('.settings-nav-item').forEach(btn => btn.classList.remove('active'));
+    const navBtn = document.getElementById(`snav-${tabId}`);
+    if (navBtn) navBtn.classList.add('active');
   }
 
   // ── Section: Appearance ───────────────────────────────────────────────────
 
   function _sectionAppearance() {
     return `
-      <div class="settings-section">
-        <h3 class="settings-section-title">Appearance</h3>
-        <div class="settings-field">
-          <label class="settings-label">Theme</label>
-          <select class="settings-select" data-key="theme">
-            <option value="system" ${_v('theme') === 'system' ? 'selected' : ''}>System default</option>
-            <option value="dark"   ${_v('theme') === 'dark'   ? 'selected' : ''}>Dark</option>
-            <option value="light"  ${_v('theme') === 'light'  ? 'selected' : ''}>Light</option>
-          </select>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">Font family</label>
-          <select class="settings-select" id="fontFamilySelect" data-key="ui_font_family">
-            <option value="system-ui">System default</option>
-          </select>
-          <p class="settings-hint">Applied to all Lincoln UI text.</p>
-        </div>
+      <h3 class="settings-pane-title">Appearance</h3>
+      <div class="settings-field">
+        <label class="settings-label">Theme</label>
+        <select class="settings-select" data-key="theme">
+          <option value="system" ${_v('theme') === 'system' ? 'selected' : ''}>System default</option>
+          <option value="dark"   ${_v('theme') === 'dark'   ? 'selected' : ''}>Dark</option>
+          <option value="light"  ${_v('theme') === 'light'  ? 'selected' : ''}>Light</option>
+        </select>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">Font family</label>
+        <select class="settings-select" id="fontFamilySelect" data-key="ui_font_family">
+          <option value="system-ui">System default</option>
+        </select>
+        <p class="settings-hint">Applied to all Lincoln UI text.</p>
       </div>
     `;
   }
@@ -119,19 +158,17 @@ const lincolnSettings = (() => {
 
   function _sectionChat() {
     return `
-      <div class="settings-section">
-        <h3 class="settings-section-title">Chat & History</h3>
-        <div class="settings-field">
-          <label class="settings-label">History limit</label>
-          <input class="settings-input" type="number" min="10" max="1000"
-            data-key="history_limit" value="${_esc(_v('history_limit', '100'))}">
-          <p class="settings-hint">Maximum number of past sessions shown in the sidebar.</p>
-        </div>
-        <div class="settings-field settings-field-row">
-          <label class="settings-label">Show project chats in sidebar by default</label>
-          <input type="checkbox" class="settings-checkbox" data-key="sidebar_show_project_chats"
-            ${_v('sidebar_show_project_chats') === 'true' ? 'checked' : ''}>
-        </div>
+      <h3 class="settings-pane-title">Chat &amp; History</h3>
+      <div class="settings-field">
+        <label class="settings-label">History limit</label>
+        <input class="settings-input" type="number" min="10" max="1000"
+          data-key="history_limit" value="${_esc(_v('history_limit', '100'))}">
+        <p class="settings-hint">Maximum number of past sessions shown in the sidebar.</p>
+      </div>
+      <div class="settings-field settings-field-row">
+        <label class="settings-label">Show project chats in sidebar by default</label>
+        <input type="checkbox" class="settings-checkbox" data-key="sidebar_show_project_chats"
+          ${_v('sidebar_show_project_chats') === 'true' ? 'checked' : ''}>
       </div>
     `;
   }
@@ -143,23 +180,18 @@ const lincolnSettings = (() => {
     const blocksHtml   = promptBlocks.map(p => _promptBlockHTML(p)).join('');
 
     return `
-      <div class="settings-section">
-        <h3 class="settings-section-title">Prompts &amp; Persona</h3>
-        <p class="settings-hint" style="margin-bottom:12px">
-          These instruction blocks define how Lincoln behaves. They are assembled into
-          the system prompt on every message, in order. Edit any block freely —
-          this is how you control Lincoln's personality, tone, and domain knowledge.
-          Project-level instructions are set in each project's Settings tab.
-        </p>
-
-        <div id="globalPromptBlocks">
-          ${blocksHtml}
-        </div>
-
-        <button class="btn-secondary" style="margin-top:8px" onclick="lincolnSettings.addPromptBlock()">
-          <i class="ti ti-plus"></i> Add instruction block
-        </button>
+      <h3 class="settings-pane-title">Prompts &amp; Persona</h3>
+      <p class="settings-hint" style="margin-bottom:12px">
+        These instruction blocks define how Lincoln behaves. They are assembled into
+        the system prompt on every message, in order. Edit any block freely.
+        Project-level instructions are set in each project's Settings → Context tab.
+      </p>
+      <div id="globalPromptBlocks">
+        ${blocksHtml}
       </div>
+      <button class="btn-secondary" style="margin-top:8px" onclick="lincolnSettings.addPromptBlock()">
+        <i class="ti ti-plus"></i> Add instruction block
+      </button>
     `;
   }
 
@@ -172,7 +204,7 @@ const lincolnSettings = (() => {
           </div>
           <input class="prompt-label-input" type="text"
             value="${_esc(p.label)}"
-            placeholder="Block label (e.g. 'Lincoln persona')"
+            placeholder="Block label"
             onchange="lincolnSettings._updatePromptField(${p.id}, 'label', this.value)">
           <label class="prompt-toggle-label" title="Enable / disable this block">
             <input type="checkbox" class="prompt-enabled-cb"
@@ -186,19 +218,16 @@ const lincolnSettings = (() => {
           </button>
         </div>
         <textarea class="prompt-content-textarea"
-          placeholder="Write your instruction here. Lincoln will follow it on every message."
+          placeholder="Write your instruction here."
           rows="6"
           onblur="lincolnSettings._updatePromptField(${p.id}, 'content', this.value)"
         >${_esc(p.content)}</textarea>
-        <p class="settings-hint">
-          Changes saved when you click outside the text box (on blur).
-        </p>
+        <p class="settings-hint">Changes saved when you click outside (on blur).</p>
       </div>
     `;
   }
 
   async function addPromptBlock() {
-    // Both label and content are required by the route — send non-empty defaults
     const label   = 'New instruction block';
     const content = 'Enter your instructions here.';
     try {
@@ -213,7 +242,6 @@ const lincolnSettings = (() => {
         return;
       }
       const newPrompt = await res.json();
-      // newPrompt.id is now the real DB id — no more undefined
       const container = document.getElementById('globalPromptBlocks');
       if (container && newPrompt.id) {
         container.insertAdjacentHTML('beforeend', _promptBlockHTML(newPrompt));
@@ -249,23 +277,21 @@ const lincolnSettings = (() => {
 
   function _sectionRAG() {
     return `
-      <div class="settings-section">
-        <h3 class="settings-section-title">RAG &amp; Index</h3>
-        <div class="settings-field">
-          <label class="settings-label">Top-K results</label>
-          <input class="settings-input" type="number" min="1" max="20"
-            data-key="top_k" value="${_esc(_v('top_k', '5'))}">
-          <p class="settings-hint">Number of source chunks retrieved per query.</p>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">Snippet length (characters)</label>
-          <input class="settings-input" type="number" min="100" max="2000"
-            data-key="rag_snippet_chars" value="${_esc(_v('rag_snippet_chars', '500'))}">
-          <p class="settings-hint">
-            Length of source code preview shown below RAG results.
-            Increase for Fortran/mathematical code with long function signatures.
-          </p>
-        </div>
+      <h3 class="settings-pane-title">RAG &amp; Index</h3>
+      <div class="settings-field">
+        <label class="settings-label">Top-K results</label>
+        <input class="settings-input" type="number" min="1" max="20"
+          data-key="top_k" value="${_esc(_v('top_k', '5'))}">
+        <p class="settings-hint">Number of source chunks retrieved per query.</p>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">Snippet length (characters)</label>
+        <input class="settings-input" type="number" min="100" max="2000"
+          data-key="rag_snippet_chars" value="${_esc(_v('rag_snippet_chars', '500'))}">
+        <p class="settings-hint">
+          Length of source code preview shown below RAG results.
+          Increase for Fortran/mathematical code with long function signatures.
+        </p>
       </div>
     `;
   }
@@ -274,29 +300,26 @@ const lincolnSettings = (() => {
 
   function _sectionUploads() {
     return `
-      <div class="settings-section">
-        <h3 class="settings-section-title">File Uploads</h3>
-        <div class="settings-field">
-          <label class="settings-label">Max text / code file size (KB)</label>
-          <input class="settings-input" type="number" min="64" max="8192"
-            data-key="upload_max_text_kb" value="${_esc(_v('upload_max_text_kb', '512'))}">
-          <p class="settings-hint">Applies to .py, .f90, .jl, .r, .tex, and all code files.</p>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">Max document file size (MB)</label>
-          <input class="settings-input" type="number" min="1" max="50"
-            data-key="upload_max_doc_mb" value="${_esc(_v('upload_max_doc_mb', '2'))}">
-          <p class="settings-hint">Applies to PDF, Word (.docx), Excel (.xlsx), and Maple (.mw) files.</p>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">Upload retention (days)</label>
-          <input class="settings-input" type="number" min="1" max="365"
-            data-key="upload_retention_days" value="${_esc(_v('upload_retention_days', '30'))}">
-          <p class="settings-hint">
-            Extracted upload files older than this are deleted at startup.
-            Frees disk space from old chat attachments.
-          </p>
-        </div>
+      <h3 class="settings-pane-title">File Uploads</h3>
+      <div class="settings-field">
+        <label class="settings-label">Max text / code file size (KB)</label>
+        <input class="settings-input" type="number" min="64" max="8192"
+          data-key="upload_max_text_kb" value="${_esc(_v('upload_max_text_kb', '512'))}">
+        <p class="settings-hint">Applies to .py, .f90, .jl, .r, .tex, and all code files.</p>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">Max document file size (MB)</label>
+        <input class="settings-input" type="number" min="1" max="50"
+          data-key="upload_max_doc_mb" value="${_esc(_v('upload_max_doc_mb', '2'))}">
+        <p class="settings-hint">Applies to PDF, Word (.docx), Excel (.xlsx), and Maple (.mw) files.</p>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">Upload retention (days)</label>
+        <input class="settings-input" type="number" min="1" max="365"
+          data-key="upload_retention_days" value="${_esc(_v('upload_retention_days', '30'))}">
+        <p class="settings-hint">
+          Extracted upload files older than this are deleted at startup.
+        </p>
       </div>
     `;
   }
@@ -305,19 +328,27 @@ const lincolnSettings = (() => {
 
   function _sectionWebSearch() {
     return `
-      <div class="settings-section">
-        <h3 class="settings-section-title">Web Search</h3>
-        <div class="settings-field settings-field-row">
-          <label class="settings-label">Enable web search toggle by default</label>
-          <input type="checkbox" class="settings-checkbox" data-key="web_search_enabled"
-            ${_v('web_search_enabled') === 'true' ? 'checked' : ''}>
-        </div>
-        <p class="settings-hint">
-          The globe icon in the input bar enables web search per message.
-          Web results are injected into the system prompt before streaming.
-          Powered by DuckDuckGo (no API key required).
-        </p>
+      <h3 class="settings-pane-title">Web Search</h3>
+      <div class="settings-field settings-field-row">
+        <label class="settings-label">Enable web search master switch</label>
+        <input type="checkbox" class="settings-checkbox" data-key="web_search_enabled"
+          ${_v('web_search_enabled') === 'true' ? 'checked' : ''}>
       </div>
+      <p class="settings-hint" style="margin-bottom:12px">
+        Master switch — must be ON for any web search to fire.
+        The globe pill in the input bar toggles search per message.
+        Powered by DuckDuckGo (no API key required). Google Custom Search is
+        configured as fallback in the Infrastructure tab.
+      </p>
+      <div class="settings-field settings-field-row">
+        <label class="settings-label">Always-on search mode</label>
+        <input type="checkbox" class="settings-checkbox" data-key="web_search_always_on"
+          ${_v('web_search_always_on') === 'true' ? 'checked' : ''}>
+      </div>
+      <p class="settings-hint">
+        When enabled, the globe pill starts active on every message and does not
+        reset after sending. Requires master switch to also be ON.
+      </p>
     `;
   }
 
@@ -325,66 +356,58 @@ const lincolnSettings = (() => {
 
   function _sectionBuildTools() {
     return `
-      <div class="settings-section">
-        <h3 class="settings-section-title">Build Tools</h3>
-        <p class="settings-hint" style="margin-bottom:12px">
-          These paths are used when Lincoln generates build advice, launches Aider,
-          or constructs WSL commands. Edit them here if your tool locations change.
-        </p>
-        <div class="settings-field">
-          <label class="settings-label">nvfortran path (WSL absolute path)</label>
-          <input class="settings-input" type="text"
-            data-key="nvfortran_path"
-            value="${_esc(_v('nvfortran_path', '/opt/nvidia/hpc_sdk/Linux_x86_64/26.3/compilers/bin/nvfortran'))}"
-            placeholder="/opt/nvidia/hpc_sdk/.../nvfortran">
-          <p class="settings-hint">NVIDIA HPC SDK Fortran compiler. Used for build advice and Aider WSL launch.</p>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">f2py compiler flag</label>
-          <input class="settings-input" type="text"
-            data-key="f2py_fcompiler_flag" value="${_esc(_v('f2py_fcompiler_flag', 'nv'))}"
-            placeholder="nv">
-          <p class="settings-hint">Passed as --fcompiler=&lt;value&gt; to f2py. For nvfortran: nv</p>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">WSL distro name</label>
-          <input class="settings-input" type="text"
-            data-key="wsl_distro" value="${_esc(_v('wsl_distro', 'Ubuntu'))}"
-            placeholder="Ubuntu">
-          <p class="settings-hint">Used when launching Aider in WSL mode. Matches your default wsl -l output.</p>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">Aider launch mode</label>
-          <select class="settings-select" data-key="aider_launch_mode">
-            <option value="cmd" ${_v('aider_launch_mode') === 'cmd' ? 'selected' : ''}>Windows cmd terminal</option>
-            <option value="wsl" ${_v('aider_launch_mode') === 'wsl' ? 'selected' : ''}>WSL bash terminal (for WSL-path projects)</option>
-          </select>
-          <p class="settings-hint">
-            Use WSL mode for OptionsPricing and other projects where the source lives under WSL.
-          </p>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">Maple installation path (Windows)</label>
-          <input class="settings-input" type="text"
-            data-key="maple_path"
-            value="${_esc(_v('maple_path', 'D:\\Maple\\bin.X86_64_WINDOWS'))}"
-            placeholder="D:\Maple\bin.X86_64_WINDOWS">
-          <p class="settings-hint">Path to Maple bin directory. cmaple.exe must be in this folder.</p>
-        </div>
-        <div class="settings-field">
-          <label class="settings-label">Intel oneAPI root (Windows)</label>
-          <input class="settings-input" type="text"
-            data-key="oneapi_path"
-            value="${_esc(_v('oneapi_path', 'C:\\Program Files (x86)\\Intel\\oneAPI'))}"
-            placeholder="C:\Program Files (x86)\Intel\oneAPI">
-          <p class="settings-hint">
-            Used for MKL build advice. Intel MKL is linked at
-            &lt;oneapi_path&gt;\mkl\latest.
-          </p>
-        </div>
-        <div id="toolPathsStatus" style="margin-top:8px">
-          <p class="settings-hint">Loading tool detection status…</p>
-        </div>
+      <h3 class="settings-pane-title">Build Tools</h3>
+      <p class="settings-hint" style="margin-bottom:12px">
+        These paths are used when Lincoln generates build advice, launches Aider,
+        or constructs WSL commands. Edit them here if your tool locations change.
+      </p>
+      <div class="settings-field">
+        <label class="settings-label">nvfortran path (WSL absolute path)</label>
+        <input class="settings-input" type="text"
+          data-key="nvfortran_path"
+          value="${_esc(_v('nvfortran_path', '/opt/nvidia/hpc_sdk/Linux_x86_64/26.3/compilers/bin/nvfortran'))}"
+          placeholder="/opt/nvidia/hpc_sdk/.../nvfortran">
+        <p class="settings-hint">NVIDIA HPC SDK Fortran compiler.</p>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">f2py compiler flag</label>
+        <input class="settings-input" type="text"
+          data-key="f2py_fcompiler_flag" value="${_esc(_v('f2py_fcompiler_flag', 'nv'))}"
+          placeholder="nv">
+        <p class="settings-hint">Passed as --fcompiler=&lt;value&gt; to f2py.</p>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">WSL distro name</label>
+        <input class="settings-input" type="text"
+          data-key="wsl_distro" value="${_esc(_v('wsl_distro', 'Ubuntu'))}"
+          placeholder="Ubuntu">
+        <p class="settings-hint">Used when launching Aider in WSL mode.</p>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">Aider launch mode</label>
+        <select class="settings-select" data-key="aider_launch_mode">
+          <option value="cmd" ${_v('aider_launch_mode') === 'cmd' ? 'selected' : ''}>Windows cmd terminal</option>
+          <option value="wsl" ${_v('aider_launch_mode') === 'wsl' ? 'selected' : ''}>WSL bash terminal</option>
+        </select>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">Maple installation path (Windows)</label>
+        <input class="settings-input" type="text"
+          data-key="maple_path"
+          value="${_esc(_v('maple_path', 'D:\\\\Maple\\\\bin.X86_64_WINDOWS'))}"
+          placeholder="D:\\Maple\\bin.X86_64_WINDOWS">
+        <p class="settings-hint">Path to Maple bin directory. cmaple.exe must be in this folder.</p>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">Intel oneAPI root (Windows)</label>
+        <input class="settings-input" type="text"
+          data-key="oneapi_path"
+          value="${_esc(_v('oneapi_path', 'C:\\\\Program Files (x86)\\\\Intel\\\\oneAPI'))}"
+          placeholder="C:\\Program Files (x86)\\Intel\\oneAPI">
+        <p class="settings-hint">Used for MKL build advice.</p>
+      </div>
+      <div id="toolPathsStatus" style="margin-top:8px">
+        <p class="settings-hint">Loading tool detection status...</p>
       </div>
     `;
   }
@@ -393,17 +416,15 @@ const lincolnSettings = (() => {
 
   function _sectionModels() {
     return `
-      <div class="settings-section">
-        <h3 class="settings-section-title">Models</h3>
-        <div class="settings-field">
-          <label class="settings-label">Ollama response timeout (seconds)</label>
-          <input class="settings-input" type="number" min="30" max="600"
-            data-key="ollama_timeout_sec" value="${_esc(_v('ollama_timeout_sec', '180'))}">
-          <p class="settings-hint">
-            How long Lincoln waits for a streaming response before giving up.
-            Increase for very long Fortran analysis or large document tasks.
-          </p>
-        </div>
+      <h3 class="settings-pane-title">Models</h3>
+      <div class="settings-field">
+        <label class="settings-label">Ollama response timeout (seconds)</label>
+        <input class="settings-input" type="number" min="30" max="600"
+          data-key="ollama_timeout_sec" value="${_esc(_v('ollama_timeout_sec', '180'))}">
+        <p class="settings-hint">
+          How long Lincoln waits for a streaming response before giving up.
+          Increase for very long Fortran analysis or large document tasks.
+        </p>
       </div>
     `;
   }
@@ -412,46 +433,95 @@ const lincolnSettings = (() => {
 
   function _sectionInfrastructure() {
     return `
-      <div class="settings-section">
-        <div class="settings-section-header">
-          <h3 class="settings-section-title">Infrastructure</h3>
-          <button class="admin-mode-toggle" id="adminModeBtn"
-            onclick="lincolnSettings.toggleAdminMode()">
-            <i class="ti ti-lock"></i>
-            <span id="adminModeBtnLabel">Enable admin mode</span>
+      <h3 class="settings-pane-title">Infrastructure</h3>
+      <div class="settings-section-header" style="margin-bottom:12px">
+        <button class="admin-mode-toggle" id="adminModeBtn"
+          onclick="lincolnSettings.toggleAdminMode()">
+          <i class="ti ti-lock"></i>
+          <span id="adminModeBtnLabel">Enable admin mode</span>
+        </button>
+      </div>
+      <p class="settings-hint" style="margin-bottom:16px">
+        Infrastructure values are read from <code>.env</code> at startup.
+        Enable admin mode to edit them.
+        <strong>Changes to .env values require a restart.</strong>
+        Version and codename changes take effect immediately.
+      </p>
+
+      <div class="settings-subgroup-title">Version</div>
+      <div class="settings-field settings-two-col">
+        <div>
+          <label class="settings-label">Version number</label>
+          <input class="settings-input" type="text"
+            data-key="lincoln_version"
+            value="${_esc(_v('lincoln_version', '0.7.0'))}"
+            placeholder="0.7.0">
+          <p class="settings-hint">Stored in DB. Shown in UI header and terminal banner.</p>
+        </div>
+        <div>
+          <label class="settings-label">Codename</label>
+          <input class="settings-input" type="text"
+            data-key="lincoln_codename"
+            value="${_esc(_v('lincoln_codename', 'Navigator'))}"
+            placeholder="Navigator">
+          <p class="settings-hint">Shown in terminal banner alongside version.</p>
+        </div>
+      </div>
+
+      <div class="settings-subgroup-title" style="margin-top:16px">Ollama / LLM</div>
+      <div data-admin-section>
+        ${_infraField('OLLAMA_API_BASE',    _infra.ollama_base_url || '',
+          'Ollama server URL',
+          'URL where Ollama is running. Default: http://localhost:11434', '')}
+        ${_infraField('LINCOLN_LLM_MODEL', _infra.llm_model || '',
+          'Default LLM model',
+          'The model loaded by default. Can be overridden per session in the UI model selector.', '')}
+        ${_infraField('LINCOLN_EMBED_MODEL', _infra.embed_model || '',
+          'Embedding model',
+          'Fixed embedding model used by ChromaDB. Changing this requires a full re-index of all projects.',
+          'warning-reindex')}
+        ${_infraField('LINCOLN_CHUNK_SIZE', _infra.chunk_size || '',
+          'RAG chunk size (tokens)',
+          'Number of tokens per text chunk during indexing. Changing requires re-indexing all projects.',
+          'warning-reindex')}
+        ${_infraField('LINCOLN_UI_PORT',   _infra.ui_port || '5000',
+          'UI port',
+          'Port Lincoln serves on. Default: 5000.',
+          'warning-restart')}
+        ${_infraField('LINCOLN_VRAM_GB',   _infra.vram_gb || '16',
+          'VRAM cap (GB)',
+          "Used to calculate the context window ceiling. Set to your GPU's available VRAM.", '')}
+
+        <div class="settings-subgroup-title" style="margin-top:16px">Google Custom Search (fallback)</div>
+        <p class="settings-hint" style="margin-bottom:8px">
+          Optional fallback when DuckDuckGo rate-limits. Free tier: 100 queries/day.<br>
+          Setup: <a href="https://console.cloud.google.com" target="_blank">console.cloud.google.com</a>
+          → Custom Search JSON API → create key.
+          <a href="https://cse.google.com" target="_blank">cse.google.com</a>
+          → new engine → enable "Search the entire web" → copy CX id.
+        </p>
+        ${_infraField('GOOGLE_API_KEY', _infra.google_api_key || '',
+          'Google API Key',
+          'API key for Custom Search JSON API. Leave blank to use DDG only.', '')}
+        ${_infraField('GOOGLE_CSE_ID',  _infra.google_cse_id  || '',
+          'Google CSE ID (cx)',
+          'Custom Search Engine ID. Found at cse.google.com after creating an engine.', '')}
+
+        <div class="settings-subgroup-title" style="margin-top:16px">Admin Actions</div>
+        <p class="settings-hint" style="margin-bottom:10px">
+          One-click dev tools. Only visible in admin mode.
+        </p>
+        <div class="infra-action-row" id="adminActionRow" style="display:none">
+          <button class="infra-action-btn" onclick="lincolnSettings._openDevTerminal()">
+            <i class="ti ti-terminal-2"></i>
+            Open Dev Terminal
+          </button>
+          <button class="infra-action-btn infra-action-danger" onclick="lincolnSettings._confirmGitReset()">
+            <i class="ti ti-refresh-alert"></i>
+            Git Reset Hard
           </button>
         </div>
-        <p class="settings-hint" style="margin-bottom:12px">
-          These values are read from <code>.env</code> at startup and affect the
-          entire Lincoln system. They are shown here so nothing is hidden from you.
-          Enable admin mode to edit them. <strong>Changes require a restart to take effect.</strong>
-        </p>
-        <div data-admin-section>
-          ${_infraField('OLLAMA_API_BASE',    _infra.ollama_base_url || '',
-            'Ollama server URL',
-            'URL where Ollama is running. Default: http://localhost:11434',
-            '')}
-          ${_infraField('LINCOLN_LLM_MODEL', _infra.llm_model || '',
-            'Default LLM model',
-            'The model loaded by default. Can be overridden per session in the UI model selector.',
-            '')}
-          ${_infraField('LINCOLN_EMBED_MODEL', _infra.embed_model || '',
-            'Embedding model',
-            'Fixed embedding model used by ChromaDB. Changing this requires a full re-index of all projects.',
-            'warning-reindex')}
-          ${_infraField('LINCOLN_CHUNK_SIZE', _infra.chunk_size || '',
-            'RAG chunk size (tokens)',
-            'Number of tokens per text chunk during indexing. Changing this requires re-indexing all projects.',
-            'warning-reindex')}
-          ${_infraField('LINCOLN_UI_PORT',   _infra.ui_port || '5000',
-            'UI port',
-            'Port Lincoln serves on. Default: 5000. Change requires restart.',
-            'warning-restart')}
-          ${_infraField('LINCOLN_VRAM_GB',   _infra.vram_gb || '16',
-            'VRAM cap (GB)',
-            'Used to calculate the context window ceiling. Set to your GPU\'s available VRAM.',
-            '')}
-        </div>
+        <p class="settings-hint" id="adminActionsHint">Enable admin mode to see actions.</p>
       </div>
     `;
   }
@@ -500,11 +570,48 @@ const lincolnSettings = (() => {
       const data = await res.json();
       if (res.ok) {
         field.querySelector('.infra-restart-note').style.display = 'block';
+        lincolnChat?.showToast?.(`${envKey} saved — restart to apply`, 'info');
       } else {
-        alert(data.error || 'Failed to save infrastructure setting.');
+        lincolnChat?.showToast?.(data.error || 'Failed to save setting.', 'error');
       }
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      lincolnChat?.showToast?.(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  async function _openDevTerminal() {
+    try {
+      const res  = await fetch('/api/settings/open-terminal', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        lincolnChat?.showToast?.('Dev terminal opened.', 'info');
+      } else {
+        lincolnChat?.showToast?.(data.error || 'Failed to open terminal.', 'error');
+      }
+    } catch (err) {
+      lincolnChat?.showToast?.(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  async function _confirmGitReset() {
+    if (!confirm(
+      'Git Reset Hard\n\n' +
+      'This will run: git reset --hard HEAD\n\n' +
+      'ALL uncommitted changes will be lost. ' +
+      'This cannot be undone.\n\n' +
+      'Are you sure?'
+    )) return;
+
+    try {
+      const res  = await fetch('/api/settings/git-reset', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        lincolnChat?.showToast?.('Git reset complete. Restart Lincoln.', 'info');
+      } else {
+        lincolnChat?.showToast?.(data.error || 'Git reset failed.', 'error');
+      }
+    } catch (err) {
+      lincolnChat?.showToast?.(`Error: ${err.message}`, 'error');
     }
   }
 
@@ -512,11 +619,9 @@ const lincolnSettings = (() => {
 
   function _sectionStatus() {
     return `
-      <div class="settings-section">
-        <h3 class="settings-section-title">System Status</h3>
-        <div id="statusContent">
-          <p class="settings-hint">Loading status…</p>
-        </div>
+      <h3 class="settings-pane-title">System Status</h3>
+      <div id="statusContent">
+        <p class="settings-hint">Loading status...</p>
       </div>
     `;
   }
@@ -614,21 +719,23 @@ const lincolnSettings = (() => {
   function _applyAdminMode() {
     const btn       = document.getElementById('adminModeBtn');
     const label     = document.getElementById('adminModeBtnLabel');
-    const section   = document.querySelector('[data-admin-section]');
     const inputs    = document.querySelectorAll('.infra-input');
     const saveBtns  = document.querySelectorAll('.infra-save-btn');
+    const actionRow = document.getElementById('adminActionRow');
+    const actionHint= document.getElementById('adminActionsHint');
 
     if (!btn) return;
 
     btn.classList.toggle('admin-mode-active', _adminMode);
     if (label) label.textContent = _adminMode ? 'Disable admin mode' : 'Enable admin mode';
 
-    inputs.forEach(input => { input.disabled = !_adminMode; });
-    saveBtns.forEach(btn  => { btn.style.display = _adminMode ? 'inline-flex' : 'none'; });
+    inputs.forEach(input  => { input.disabled = !_adminMode; });
+    saveBtns.forEach(b    => { b.style.display = _adminMode ? 'inline-flex' : 'none'; });
+    if (actionRow)  actionRow.style.display  = _adminMode ? 'flex' : 'none';
+    if (actionHint) actionHint.style.display = _adminMode ? 'none' : 'block';
 
-    if (section) {
-      section.dataset.adminMode = _adminMode ? 'true' : 'false';
-    }
+    const section = document.querySelector('[data-admin-section]');
+    if (section) section.dataset.adminMode = _adminMode ? 'true' : 'false';
   }
 
   // ── Save user settings ────────────────────────────────────────────────────
@@ -654,6 +761,10 @@ const lincolnSettings = (() => {
       });
       _applyTheme(updates.theme || _v('theme'));
       _applyFont(updates.ui_font_family || _v('ui_font_family'));
+      // Sync always-on search pill state
+      if (typeof lincolnChat !== 'undefined' && lincolnChat.syncAlwaysOnSearch) {
+        lincolnChat.syncAlwaysOnSearch(updates.web_search_always_on === 'true');
+      }
     } catch (err) {
       console.error('Settings save error:', err);
     }
@@ -682,19 +793,14 @@ const lincolnSettings = (() => {
       const data = await res.json();
       _availableModels = data.models || [];
 
-      // Set default active model
       const preferred = data.default_model || '';
       if (!activeModel) {
         activeModel = preferred || (_availableModels[0]?.name ?? 'qwen3.5:9b');
       }
 
-      // Update the pill label
       _updateModelPillLabel();
-
-      // Build/rebuild the dropdown items
       _renderModelDropdown();
 
-      // Close dropdown when clicking outside
       document.addEventListener('click', (e) => {
         const dropdown = document.getElementById('modelDropdown');
         const pill     = document.getElementById('modelPill');
@@ -755,7 +861,6 @@ const lincolnSettings = (() => {
   // ── Event listeners ───────────────────────────────────────────────────────
 
   function _attachListeners() {
-    // Auto-save any input/select/checkbox change
     const panel = document.getElementById('settingsPanelContent');
     if (!panel) return;
 
@@ -764,8 +869,6 @@ const lincolnSettings = (() => {
         _saveUserSettings();
       }
     });
-
-    // Textarea changes (prompts) are handled per-block via onblur
   }
 
   // ── Utilities ─────────────────────────────────────────────────────────────
@@ -789,6 +892,9 @@ const lincolnSettings = (() => {
     _updatePromptField,
     _deletePromptBlock,
     _saveEnvField,
+    _openDevTerminal,
+    _confirmGitReset,
+    _switchTab,
     get activeModel() { return activeModel; },
   };
 
