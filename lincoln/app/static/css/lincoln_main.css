@@ -2189,24 +2189,38 @@ body { font-family: var(--ui-font); }
         font-weight: 500;
     }
 
-/* Right pane container */
+
+.settings-body {
+    padding: 0;
+    gap: 0;
+    overflow: hidden; /* Locks the outer modal so it doesn't scroll */
+}
+
 .settings-pane-container {
     flex: 1;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
     min-height: 0;
 }
 
-/* Individual pane — flex column, scrollable */
 .settings-pane {
-    display: none;
-    flex-direction: column;
-    gap: 14px;
-    padding: 18px 20px;
-    overflow-y: auto;
-    height: 100%;
+    display: none; /* JS will set this to 'block' */
+    flex: 1;
+    padding: 20px 24px;
+    overflow-y: auto; /* Scrollbar safely triggers here */
+    min-height: 0;
     box-sizing: border-box;
 }
 
+    /* Replaces the flex 'gap: 14px' since it is now a block container */
+    .settings-pane > * {
+        margin-bottom: 14px;
+    }
+
+        .settings-pane > *:last-child {
+            margin-bottom: 0;
+        }
 /* Pane title replaces old section title */
 .settings-pane-title {
     font-size: 13px;
@@ -2269,9 +2283,3 @@ body { font-family: var(--ui-font); }
         .infra-action-btn.infra-action-danger:hover {
             background: color-mix(in srgb, var(--text-danger) 8%, transparent);
         }
-
-/* Override old settings-body gap — layout now handled by pane */
-.settings-body {
-    padding: 0 !important;
-    gap: 0 !important;
-}
