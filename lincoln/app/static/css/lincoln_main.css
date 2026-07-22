@@ -2194,6 +2194,7 @@ body { font-family: var(--ui-font); }
     padding: 0;
     gap: 0;
     overflow: hidden; /* Locks the outer modal so it doesn't scroll */
+    min-height: 0; /* <-- ADD THIS: Stops the infinite downward stretch */
 }
 
 .settings-pane-container {

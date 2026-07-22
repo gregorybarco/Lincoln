@@ -129,7 +129,7 @@ const lincolnSettings = (() => {
     document.querySelectorAll('.settings-pane').forEach(p => p.style.display = 'none');
     // Show target pane
     const target = document.getElementById(`pane-${tabId}`);
-    if (target) target.style.display = 'BLOCK';
+    if (target) target.style.display = 'block';
     // Update nav active state
     document.querySelectorAll('.settings-nav-item').forEach(btn => btn.classList.remove('active'));
     const navBtn = document.getElementById(`snav-${tabId}`);
