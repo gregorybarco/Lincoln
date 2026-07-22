@@ -1,15 +1,20 @@
 """
-Lincoln Chat Routes  v0.6.0
+Lincoln Chat Routes  v0.7.0
 =============================
 Flask routes for the chat interface.
 
+Changes in v0.7.0:
+  - Multi-file support: /api/chat/send now accepts file_ids[] (array) in addition
+    to legacy file_id (single). All attached files are concatenated into the LLM
+    payload in order, each labelled with its filename. The display text shows
+    a count badge ("3 files: ...") when multiple files are attached.
+  - Backwards compatible: if only file_id is sent (old JS), it still works.
+
 Changes in v0.6.0:
   - System prompt assembled from DB via get_active_system_prompt() -- not hardcoded.
-  - use_web_search flag: when true, DuckDuckGo results are injected into system prompt
-    before the Ollama streaming call. Fixes B3/B7 (search command was broken).
+  - use_web_search flag: when true, DuckDuckGo results are injected into system prompt.
   - display_text and LLM injection text properly separated for file attachments.
-  - Ban list check on generated code for OptionsPricing-flagged projects (optional,
-    result appended to SSE stream as 'ban_check' event type).
+  - Ban list check on generated code for OptionsPricing-flagged projects.
 
 Endpoints:
   POST /api/chat/session      Create a new session
@@ -26,6 +31,7 @@ from lincoln.lincoln_database import (
     add_message,
     create_session,
     get_project_by_id,
+    get_project_context,
     get_session_messages,
     rename_session,
     get_active_system_prompt,
@@ -83,39 +89,50 @@ def send_message():
     project_id     = data.get("project_id")
     use_rag        = data.get("use_rag", True)
     use_web_search = data.get("use_web_search", False)
-    file_id        = data.get("file_id")
     think_mode     = data.get("think_mode", "normal")
     think          = (think_mode == "deep")
+
+    # v0.7.0 multi-file: accept file_ids[] array OR legacy single file_id
+    raw_file_ids = data.get("file_ids") or []
+    if not raw_file_ids and data.get("file_id"):
+        raw_file_ids = [data.get("file_id")]
+    # Sanitise: only hex chars allowed in file IDs
+    file_ids = ["".join(c for c in fid if c in "0123456789abcdef") for fid in raw_file_ids if fid]
 
     if not session_id or not user_text:
         return jsonify({"error": "session_id and message are required"}), 400
 
     # ── Inject uploaded file content into LLM payload ─────────────────────────
-    injected_filename = None
-    llm_text          = user_text   # text sent to Ollama (may include file blob)
-    display_text      = user_text   # text saved to DB and shown in UI
+    # Concatenate all attached files in order, each with a labelled header.
+    injected_filenames = []
+    file_blobs         = []
+    llm_text           = user_text   # built below
+    display_text       = user_text   # text saved to DB and shown in UI
 
-    if file_id:
-        safe_id = "".join(c for c in file_id if c in "0123456789abcdef")
-        # v0.6.0: all extracted content stored as .txt
+    for safe_id in file_ids:
         txt_path = _UPLOAD_DIR / f"{safe_id}.txt"
         matches  = [txt_path] if txt_path.exists() else list(_UPLOAD_DIR.glob(f"{safe_id}.*"))
-
         if matches:
             try:
-                file_text         = matches[0].read_text(encoding="utf-8")
-                injected_filename = matches[0].stem  # filename without .txt extension
-                llm_text = (
-                    f"[Attached file: {injected_filename}]\n"
-                    f"```\n{file_text}\n```\n\n"
-                    f"{user_text}"
+                file_text = matches[0].read_text(encoding="utf-8")
+                fname     = matches[0].stem
+                injected_filenames.append(fname)
+                file_blobs.append(
+                    f"[Attached file: {fname}]\n"
+                    f"```\n{file_text}\n```"
                 )
             except Exception:
-                pass  # File read failed -- send without attachment
+                pass  # File read failed -- skip this file silently
 
-    # Save user message with display text (attachment icon + question, no blob)
-    if injected_filename:
-        display_text = f"📎 {injected_filename}\n\n{user_text}"
+    if file_blobs:
+        llm_text = "\n\n".join(file_blobs) + "\n\n" + user_text
+
+    # Build display text with attachment badge
+    if len(injected_filenames) == 1:
+        display_text = f"📎 {injected_filenames[0]}\n\n{user_text}"
+    elif len(injected_filenames) > 1:
+        names        = ", ".join(injected_filenames)
+        display_text = f"📎 {len(injected_filenames)} files: {names}\n\n{user_text}"
 
     add_message(session_id, "user", display_text)
 
@@ -135,6 +152,19 @@ def send_message():
 
         # ── Assemble system prompt from DB ────────────────────────────────────
         system_prompt = get_active_system_prompt(project_id=project_id)
+
+        # ── Per-project context window (v0.7.0) ───────────────────────────────
+        # Inject project-specific instructions set via the project settings panel.
+        # These appear after global prompt blocks but before RAG context, so they
+        # can override global behaviour for this project without editing globals.
+        if project_id:
+            proj_context = get_project_context(project_id)
+            if proj_context:
+                system_prompt += (
+                    "\n\n---\n\n"
+                    "Project-specific instructions for this session:\n\n"
+                    + proj_context
+                )
 
         # ── Web search injection ──────────────────────────────────────────────
         if use_web_search:

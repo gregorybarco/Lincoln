@@ -165,6 +165,9 @@ def initialise_database():
         _migrations = [
             "ALTER TABLE lincoln_projects ADD COLUMN code_path TEXT",
             "ALTER TABLE lincoln_projects ADD COLUMN write_enabled INTEGER DEFAULT 0",
+            # v0.7.0: per-project context window (free-text instructions injected
+            # into system prompt after global blocks, before RAG context)
+            "ALTER TABLE lincoln_projects ADD COLUMN context TEXT DEFAULT ''",
         ]
         for sql in _migrations:
             try:
@@ -431,6 +434,32 @@ def get_project_by_name(name: str) -> dict | None:
             (name,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def get_project_context(project_id: int) -> str:
+    """
+    Return the per-project context instructions for a project.
+    These are injected into the system prompt after global blocks,
+    before RAG context. Returns empty string if not set.
+    """
+    with _get_connection() as connection:
+        row = connection.execute(
+            "SELECT context FROM lincoln_projects WHERE id = ?",
+            (project_id,),
+        ).fetchone()
+    if row is None:
+        return ""
+    return row["context"] or ""
+
+
+def set_project_context(project_id: int, context: str) -> None:
+    """Save per-project context instructions to the DB."""
+    with _get_connection() as connection:
+        connection.execute(
+            "UPDATE lincoln_projects SET context = ? WHERE id = ?",
+            (context.strip(), project_id),
+        )
+        connection.commit()
 
 
 def create_project(display_name: str, path: str, code_path: str | None = None) -> dict:

@@ -67,7 +67,7 @@
         <button class="sidebar-section-action" onclick="lincolnHelp.open()" title="Help — what can Lincoln do?">
           <i class="ti ti-help" aria-hidden="true"></i>
         </button>
-        <span class="sidebar-version">v0.6.0</span>
+        <span class="sidebar-version">v0.7.0</span>
       </div>
     </div>
 
@@ -356,7 +356,7 @@
 
 <!-- ── PROJECT SETTINGS PANEL ───────────────────────────────────────────── -->
 <div class="lincoln-overlay" id="projectSettingsOverlay" style="display:none">
-  <div class="lincoln-panel" id="projectSettingsPanel" style="width:480px">
+  <div class="lincoln-panel" id="projectSettingsPanel" style="width:520px;max-height:88vh;display:flex;flex-direction:column">
     <div class="panel-header">
       <div class="panel-title">
         <i class="ti ti-folder-cog" style="margin-right:6px;font-size:15px"></i>
@@ -366,7 +366,28 @@
         <i class="ti ti-x" aria-hidden="true"></i>
       </button>
     </div>
-    <div class="panel-body">
+
+    <!-- Tab bar -->
+    <div style="display:flex;border-bottom:0.5px solid var(--border);flex-shrink:0">
+      <button class="proj-settings-tab active" id="projTabSettings"
+              onclick="lincolnSidebar._switchProjTab('settings')"
+              style="flex:1;padding:8px 0;font-size:12px;font-weight:500;border:none;background:none;color:var(--text-primary);cursor:pointer;border-bottom:2px solid var(--accent)">
+        <i class="ti ti-adjustments" style="margin-right:4px"></i>Settings
+      </button>
+      <button class="proj-settings-tab" id="projTabContext"
+              onclick="lincolnSidebar._switchProjTab('context')"
+              style="flex:1;padding:8px 0;font-size:12px;font-weight:500;border:none;background:none;color:var(--text-muted);cursor:pointer;border-bottom:2px solid transparent">
+        <i class="ti ti-text-caption" style="margin-right:4px"></i>Context
+      </button>
+      <button class="proj-settings-tab" id="projTabFiles"
+              onclick="lincolnSidebar._switchProjTab('files')"
+              style="flex:1;padding:8px 0;font-size:12px;font-weight:500;border:none;background:none;color:var(--text-muted);cursor:pointer;border-bottom:2px solid transparent">
+        <i class="ti ti-files" style="margin-right:4px"></i>Files
+      </button>
+    </div>
+
+    <!-- ── TAB: SETTINGS ── -->
+    <div id="projPaneSettings" class="panel-body" style="overflow-y:auto;flex:1">
 
       <!-- Index status -->
       <div id="projectIndexStatus" style="padding:10px 12px;background:var(--bg-page);border:0.5px solid var(--border);border-radius:var(--radius-md);font-size:12px;color:var(--text-secondary)">
@@ -436,12 +457,48 @@
 
       <div class="form-error" id="projectSettingsError" style="display:none"></div>
     </div>
-    <div class="panel-footer" style="justify-content:space-between">
+
+    <!-- ── TAB: CONTEXT ── -->
+    <div id="projPaneContext" class="panel-body" style="overflow-y:auto;flex:1;display:none">
+      <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px">
+        Project-specific instructions injected into Lincoln's system prompt for this project only.
+        Appears after global prompt blocks and before RAG context.
+        Use this to set domain rules, response style, banned patterns, or any project-specific
+        behaviour without changing global settings.
+      </p>
+      <textarea id="projContextTextarea"
+        class="form-input"
+        rows="16"
+        placeholder="e.g.&#10;This project is a Heston model calibration engine written in Fortran and Python.&#10;&#10;Rules:&#10;- Always use nvfortran at the absolute path from settings, never gfortran.&#10;- All numerical computation must stay in Fortran. Python is orchestration only.&#10;- When generating Fortran, always include explicit interface blocks.&#10;- Responses about calibration should reference the MKL BLAS/LAPACK routines available."
+        style="resize:vertical;min-height:280px;font-family:var(--font-mono);font-size:12px;line-height:1.55"
+        oninput="lincolnSidebar._markContextDirty()"></textarea>
+      <p class="form-hint" style="margin-top:6px">
+        Changes are saved when you click <strong>Save context</strong> below.
+        This context is injected on every message while this project is active.
+      </p>
+      <div id="projContextSaveStatus" style="font-size:11px;color:var(--text-muted);min-height:16px"></div>
+    </div>
+
+    <!-- ── TAB: FILES ── -->
+    <div id="projPaneFiles" class="panel-body" style="overflow-y:auto;flex:1;display:none;padding:0">
+      <div style="padding:10px 14px;border-bottom:0.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+        <span style="font-size:12px;color:var(--text-muted)" id="projFilesCount">Loading files…</span>
+        <button class="panel-btn-secondary" onclick="lincolnSidebar._loadProjectFiles()"
+                style="font-size:11px;padding:3px 10px">          <i class="ti ti-refresh" style="font-size:11px"></i> Refresh
+        </button>
+      </div>
+      <div id="projFilesList" style="overflow-y:auto;flex:1">
+        <!-- Populated by lincolnSidebar._loadProjectFiles() -->
+      </div>
+    </div>
+
+    <!-- Footer — changes per active tab -->
+    <div class="panel-footer" style="justify-content:space-between;flex-shrink:0" id="projSettingsFooter">
       <button class="panel-btn-secondary" style="color:var(--text-danger)"
               onclick="lincolnSidebar.deleteActiveProject()">
         <i class="ti ti-trash" aria-hidden="true"></i> Delete project
       </button>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px" id="projSettingsFooterRight">
         <button class="panel-btn-secondary" onclick="lincolnSidebar.closeProjectSettings()">Cancel</button>
         <button class="panel-btn-primary" onclick="lincolnSidebar.saveProjectSettings()">Save</button>
         <button class="panel-btn-confirm" id="projectIndexBtn"
@@ -487,7 +544,7 @@
         <div class="help-section-title">Chat</div>
         <div class="help-item"><span class="help-badge">Ask</span> Any question — Lincoln answers using your project code as context</div>
         <div class="help-item"><span class="help-badge">RAG</span> Select a project → your codebase is retrieved automatically</div>
-        <div class="help-item"><span class="help-badge">File</span> Click 📎 to attach a .py / .f90 / .txt / .md file as context</div>
+        <div class="help-item"><span class="help-badge">Files</span> Click 📎 to attach multiple files at once — shift-click in picker</div>
         <div class="help-item"><span class="help-badge">Search</span> Click the globe pill in the input bar to enable web search for the next message</div>
         <div class="help-item"><span class="help-badge">OCR</span> Attach a Bloomberg screenshot or image — Lincoln extracts the text automatically</div>
         <div class="help-item"><span class="help-badge">Memory</span> Switch to Memory mode → Save current session to carry context forward</div>
@@ -504,8 +561,10 @@
       <div class="help-section">
         <div class="help-section-title">Projects</div>
         <div class="help-item"><span class="help-badge">+</span> Add a project folder → Lincoln indexes all code into ChromaDB</div>
-        <div class="help-item"><span class="help-badge">RAG</span> 1 156 vectors from OptionsPricing — automatically retrieved per query</div>
-        <div class="help-item"><span class="help-badge">Re-index</span> Click a project → index button to rebuild after code changes</div>
+        <div class="help-item"><span class="help-badge">RAG</span> Vectors retrieved automatically per query when project is active</div>
+        <div class="help-item"><span class="help-badge">Re-index</span> Click a project → Settings tab → Index now to rebuild after code changes</div>
+        <div class="help-item"><span class="help-badge">Context</span> Project settings → Context tab → write project-specific instructions for Lincoln</div>
+        <div class="help-item"><span class="help-badge">Files</span> Project settings → Files tab → view and delete indexed source files</div>
       </div>
 
       <div class="help-section">

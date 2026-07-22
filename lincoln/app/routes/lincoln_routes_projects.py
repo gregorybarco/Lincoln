@@ -1,13 +1,22 @@
 """
-Lincoln Project Routes  v0.6.0
+Lincoln Project Routes  v0.7.0
 ================================
 Flask routes for project management.
 
+Changes in v0.7.0:
+  - GET/POST /api/projects/<id>/context  Per-project context window.
+    A free-text textarea in the project settings panel. Stored in
+    lincoln_projects.context column (added via migration). Injected
+    into the system prompt by lincoln_routes_chat.py after global blocks
+    and before RAG context.
+  - GET /api/projects/<id>/files         List indexed source files.
+    Returns files found on disk at the project RAG path, with metadata.
+  - DELETE /api/projects/<id>/files      Delete a source file and re-index.
+    Removes the file from disk and triggers a re-index of the project.
+
 Changes in v0.6.0:
   - Aider launch supports WSL mode (B8): checks aider_launch_mode setting.
-    If 'wsl', launches wsl.exe with auto-derived Linux path.
-  - aider_editor project setting (cmd | wsl | vscode).
-  - Index polling correctly stops on 'complete' or 'error' (B1 fix on server side).
+  - Index polling correctly stops on 'complete' or 'error'.
 
 Endpoints:
   GET    /api/projects              List all projects
@@ -18,7 +27,10 @@ Endpoints:
   GET    /api/projects/<id>/status  Poll index build status
   POST   /api/projects/<id>/preview Preview indexable files
   POST   /api/projects/<id>/aider   Launch Aider in terminal
-  GET    /api/projects/<id>/git     (handled by lincoln_routes_git.py)
+  GET    /api/projects/<id>/context Read per-project context instructions
+  POST   /api/projects/<id>/context Save per-project context instructions
+  GET    /api/projects/<id>/files   List indexed source files
+  DELETE /api/projects/<id>/files   Delete a source file + re-index
 """
 
 import subprocess
@@ -32,6 +44,8 @@ from lincoln.lincoln_database import (
     delete_project,
     get_all_projects,
     get_project_by_id,
+    get_project_context,
+    set_project_context,
     update_project_settings,
     update_project_vector_count,
     get_setting,
@@ -238,3 +252,158 @@ def launch_aider(project_id: int):
 
     except Exception as exc:
         return jsonify({"error": f"Failed to launch Aider: {exc}"}), 500
+
+
+# ── Per-project context window (v0.7.0) ───────────────────────────────────────
+
+@projects_blueprint.route("/api/projects/<int:project_id>/context", methods=["GET"])
+def get_context(project_id: int):
+    """Return the per-project context instructions."""
+    project = get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": f"Project {project_id} not found"}), 404
+    return jsonify({"context": get_project_context(project_id)})
+
+
+@projects_blueprint.route("/api/projects/<int:project_id>/context", methods=["POST"])
+def save_context(project_id: int):
+    """Save per-project context instructions."""
+    project = get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": f"Project {project_id} not found"}), 404
+    data    = request.get_json() or {}
+    context = (data.get("context") or "").strip()
+    set_project_context(project_id, context)
+    return jsonify({"status": "ok", "context": context})
+
+
+# ── Project file management (v0.7.0) ─────────────────────────────────────────
+
+# Extensions the RAG indexer accepts (mirrors lincoln_rag_index_service.py)
+_INDEXABLE_EXTENSIONS = {
+    ".py", ".f90", ".f95", ".f03", ".f08", ".f", ".for",
+    ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".scss",
+    ".c", ".cpp", ".h", ".hpp", ".cs", ".go", ".rs",
+    ".sql", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini",
+    ".sh", ".bat", ".ps1", ".jl", ".m", ".nb", ".wl", ".r", ".Rmd",
+    ".sas", ".do", ".ado", ".gms", ".ampl", ".lp", ".mps",
+    ".mw", ".mpl", ".maple", ".tex", ".latex", ".bib",
+    ".csv", ".ipynb", ".docx", ".xlsx", ".pdf",
+}
+
+
+@projects_blueprint.route("/api/projects/<int:project_id>/files", methods=["GET"])
+def list_project_files(project_id: int):
+    """
+    List all files in the project's RAG source path.
+    Returns metadata: name, relative path, size_kb, extension, is_indexable.
+    """
+    project = get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": f"Project {project_id} not found"}), 404
+
+    source_path = project.get("path", "")
+    if not source_path or source_path == ".":
+        return jsonify({"files": [], "path": source_path})
+
+    base = Path(source_path)
+    if not base.exists():
+        return jsonify({"error": f"Project path does not exist: {source_path}"}), 404
+
+    files = []
+    try:
+        for p in sorted(base.rglob("*")):
+            if p.is_file() and not any(
+                part.startswith(".") or part == "__pycache__" or part == "node_modules"
+                for part in p.parts
+            ):
+                rel = p.relative_to(base)
+                files.append({
+                    "name":         p.name,
+                    "relative_path": str(rel),
+                    "full_path":    str(p),
+                    "size_kb":      round(p.stat().st_size / 1024, 1),
+                    "extension":    p.suffix.lower(),
+                    "is_indexable": p.suffix.lower() in _INDEXABLE_EXTENSIONS,
+                })
+    except PermissionError as exc:
+        return jsonify({"error": f"Permission error reading files: {exc}"}), 500
+
+    return jsonify({"files": files, "path": source_path, "count": len(files)})
+
+
+@projects_blueprint.route("/api/projects/<int:project_id>/files", methods=["DELETE"])
+def delete_project_file(project_id: int):
+    """
+    Delete a file from the project RAG source path, then re-index.
+
+    Request body: { "relative_path": "subfolder/filename.py" }
+
+    The path is validated to be inside the project root (no path traversal).
+    After deletion, a background re-index is triggered automatically.
+    """
+    project = get_project_by_id(project_id)
+    if not project:
+        return jsonify({"error": f"Project {project_id} not found"}), 404
+
+    data    = request.get_json() or {}
+    rel_str = (data.get("relative_path") or "").strip()
+    if not rel_str:
+        return jsonify({"error": "relative_path is required"}), 400
+
+    source_path = project.get("path", "")
+    if not source_path or source_path == ".":
+        return jsonify({"error": "Project has no RAG source path configured"}), 400
+
+    base = Path(source_path).resolve()
+    target = (base / rel_str).resolve()
+
+    # Path traversal guard
+    if not str(target).startswith(str(base)):
+        return jsonify({"error": "Path traversal detected -- access denied"}), 403
+
+    if not target.exists():
+        return jsonify({"error": f"File not found: {rel_str}"}), 404
+
+    if not target.is_file():
+        return jsonify({"error": "Only files can be deleted (not directories)"}), 400
+
+    try:
+        target.unlink()
+    except Exception as exc:
+        return jsonify({"error": f"Failed to delete file: {exc}"}), 500
+
+    # Trigger background re-index
+    if _index_build_status.get(project_id, {}).get("status") != "running":
+        _index_build_status[project_id] = {
+            "status":   "running",
+            "progress": 0,
+            "message":  f"Re-indexing after deleting {rel_str}...",
+            "error":    "",
+        }
+
+        def _reindex():
+            try:
+                count = build_project_index(project, force_rebuild=True)
+                update_project_vector_count(project_id, count)
+                _index_build_status[project_id] = {
+                    "status":   "complete",
+                    "progress": 100,
+                    "message":  f"Re-index complete. {count} vectors.",
+                    "error":    "",
+                }
+            except Exception as exc:
+                _index_build_status[project_id] = {
+                    "status":   "error",
+                    "progress": 0,
+                    "message":  "Re-index failed.",
+                    "error":    str(exc),
+                }
+
+        threading.Thread(target=_reindex, daemon=True).start()
+
+    return jsonify({
+        "status":    "ok",
+        "deleted":   rel_str,
+        "reindexing": True,
+    })

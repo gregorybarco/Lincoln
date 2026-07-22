@@ -1,13 +1,21 @@
 /**
- * Lincoln Sidebar  v0.6.0  Navigator
+ * Lincoln Sidebar  v0.7.0  Navigator
  * ======================================
+ * Changes from v0.6.0:
+ *   - Project settings panel fully implemented (was a stub calling window._openProjectSettingsPanel).
+ *     Full tabbed controller: Settings / Context / Files — all in this module.
+ *   - Settings tab: path editing, write toggle, index status — was partially wired, now complete.
+ *   - Context tab: per-project instructions textarea. Loads from GET /api/projects/<id>/context,
+ *     saves to POST /api/projects/<id>/context. Dirty-state guard on close.
+ *   - Files tab: lists all files in the RAG source folder with size, RAG badge, and delete button.
+ *     DELETE /api/projects/<id>/files removes file from disk and auto-triggers re-index.
+ *   - launchAider() added (was called from HTML but never existed in this module).
+ *   - All new functions exposed in public API return object.
+ *
  * Changes from v0.5.x:
  *   - Multi-select on history: checkboxes, shift+click range, ctrl+A, Escape clears
  *   - Selection toolbar: count badge, Delete selected, Select all, Clear
- *   - DELETE /api/history/selected bulk delete (new route)
- *   - DELETE /api/history/all now correctly hits the new route
  *   - Memory panel: full list view with timestamps, tags, checkboxes, delete buttons
- *   - Memory multi-select: same pattern as history
  *   - Persist sidebar_show_project_chats to DB on toggle
  *   - hasSelection() and clearSelection() exposed for global Escape handler
  */
@@ -634,12 +642,366 @@ const lincolnSidebar = (() => {
     }
   }
 
-  // ── Project settings panel ────────────────────────────────────────────────
+  // ── Project settings panel (v0.7.0 — tabbed: Settings / Context / Files) ──
+
+  let _editingProjectId  = null;
+  let _editingWriteEnabled = false;
+  let _activeProjTab     = 'settings';
+  let _contextDirty      = false;
 
   function openProjectSettings(projectId) {
-    // Implemented in lincoln_index.html event handlers
-    if (typeof window._openProjectSettingsPanel === 'function') {
-      window._openProjectSettingsPanel(projectId);
+    _editingProjectId  = projectId;
+    _activeProjTab     = 'settings';
+    _contextDirty      = false;
+
+    const overlay = document.getElementById('projectSettingsOverlay');
+    if (overlay) overlay.style.display = 'flex';
+
+    _switchProjTab('settings');
+    _loadProjectSettingsData(projectId);
+  }
+
+  function closeProjectSettings() {
+    if (_contextDirty) {
+      if (!confirm('You have unsaved context changes. Discard them?')) return;
+    }
+    const overlay = document.getElementById('projectSettingsOverlay');
+    if (overlay) overlay.style.display = 'none';
+    _editingProjectId = null;
+    _contextDirty     = false;
+  }
+
+  function _switchProjTab(tab) {
+    _activeProjTab = tab;
+
+    // Tab buttons
+    ['settings', 'context', 'files'].forEach(t => {
+      const btn = document.getElementById('projTab' + t.charAt(0).toUpperCase() + t.slice(1));
+      if (!btn) return;
+      const isActive = t === tab;
+      btn.style.color        = isActive ? 'var(--text-primary)' : 'var(--text-muted)';
+      btn.style.borderBottom = isActive ? '2px solid var(--accent)' : '2px solid transparent';
+      btn.style.fontWeight   = isActive ? '600' : '500';
+    });
+
+    // Panes
+    const panes = { settings: 'projPaneSettings', context: 'projPaneContext', files: 'projPaneFiles' };
+    Object.entries(panes).forEach(([t, id]) => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = t === tab ? 'flex' : 'none';
+      if (el && t === tab) el.style.flexDirection = 'column';
+    });
+
+    // Footer right buttons — swap per tab
+    const footerRight = document.getElementById('projSettingsFooterRight');
+    if (footerRight) {
+      if (tab === 'settings') {
+        footerRight.innerHTML = `
+          <button class="panel-btn-secondary" onclick="lincolnSidebar.closeProjectSettings()">Cancel</button>
+          <button class="panel-btn-primary"   onclick="lincolnSidebar.saveProjectSettings()">Save</button>
+          <button class="panel-btn-confirm" id="projectIndexBtn" onclick="lincolnSidebar.indexActiveProject()">
+            <i class="ti ti-refresh"></i> Index now
+          </button>`;
+      } else if (tab === 'context') {
+        footerRight.innerHTML = `
+          <button class="panel-btn-secondary" onclick="lincolnSidebar.closeProjectSettings()">Close</button>
+          <button class="panel-btn-confirm"   onclick="lincolnSidebar._saveProjectContext()">
+            <i class="ti ti-device-floppy"></i> Save context
+          </button>`;
+      } else if (tab === 'files') {
+        footerRight.innerHTML = `
+          <button class="panel-btn-secondary" onclick="lincolnSidebar.closeProjectSettings()">Close</button>`;
+      }
+    }
+
+    // Lazy-load per tab
+    if (tab === 'context' && _editingProjectId) _loadProjectContext(_editingProjectId);
+    if (tab === 'files'   && _editingProjectId) _loadProjectFiles(_editingProjectId);
+  }
+
+  async function _loadProjectSettingsData(projectId) {
+    try {
+      const [projRes, statusRes] = await Promise.all([
+        fetch(`/api/projects`),
+        fetch(`/api/projects/${projectId}/status`),
+      ]);
+      const projects = await projRes.json();
+      const project  = projects.find(p => p.id === projectId);
+      const status   = await statusRes.json();
+
+      if (!project) return;
+
+      // Populate title
+      const title = document.getElementById('projectSettingsTitle');
+      if (title) title.textContent = project.display_name + ' — settings';
+
+      // Populate paths
+      const pathEl = document.getElementById('projSettingsPath');
+      if (pathEl) pathEl.value = project.path || '';
+
+      const codePathEl = document.getElementById('projSettingsCodePath');
+      if (codePathEl) codePathEl.value = project.code_path || '';
+
+      // Write toggle
+      _editingWriteEnabled = !!project.write_enabled;
+      _updateWriteToggle();
+
+      // Index status
+      const statusEl = document.getElementById('projectIndexStatus');
+      if (statusEl) {
+        const vectors = project.vector_count || 0;
+        const indexed = project.last_indexed
+          ? new Date(project.last_indexed).toLocaleString()
+          : 'Never';
+        const statusColor = status.status === 'running'
+          ? 'var(--text-accent)'
+          : vectors > 0 ? 'var(--text-success)' : 'var(--text-muted)';
+        statusEl.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="color:${statusColor};font-weight:500">
+              ${status.status === 'running' ? '⟳ Indexing…' : vectors > 0 ? '✓ Indexed' : 'Not indexed'}
+            </span>
+            <span style="color:var(--text-muted)">${vectors.toLocaleString()} vectors</span>
+          </div>
+          <div style="color:var(--text-muted);margin-top:3px">Last indexed: ${indexed}</div>
+          ${status.message ? `<div style="margin-top:3px">${_esc(status.message)}</div>` : ''}
+        `;
+      }
+    } catch (err) {
+      console.error('Load project settings error:', err);
+    }
+  }
+
+  function _updateWriteToggle() {
+    const btn = document.getElementById('writeToggleBtn');
+    const warn = document.getElementById('writeAccessWarning');
+    if (btn) {
+      btn.textContent  = _editingWriteEnabled ? 'On — write enabled' : 'Off — read only';
+      btn.style.color  = _editingWriteEnabled ? 'var(--text-danger)' : 'var(--text-secondary)';
+      btn.style.borderColor = _editingWriteEnabled ? 'var(--text-danger)' : 'var(--border)';
+    }
+    if (warn) warn.style.display = _editingWriteEnabled ? 'flex' : 'none';
+  }
+
+  function toggleWriteAccess() {
+    _editingWriteEnabled = !_editingWriteEnabled;
+    _updateWriteToggle();
+  }
+
+  async function saveProjectSettings() {
+    if (!_editingProjectId) return;
+    const path      = document.getElementById('projSettingsPath')?.value.trim()     || '.';
+    const code_path = document.getElementById('projSettingsCodePath')?.value.trim() || null;
+    const errEl     = document.getElementById('projectSettingsError');
+    if (errEl) errEl.style.display = 'none';
+
+    try {
+      const res = await fetch(`/api/projects/${_editingProjectId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ path, code_path, write_enabled: _editingWriteEnabled }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        if (errEl) { errEl.textContent = data.error || 'Save failed'; errEl.style.display = 'block'; }
+        return;
+      }
+      lincolnChat?.showToast?.('Project settings saved', 'success');
+      await loadProjects();
+    } catch (err) {
+      if (errEl) { errEl.textContent = err.message; errEl.style.display = 'block'; }
+    }
+  }
+
+  async function deleteActiveProject() {
+    if (!_editingProjectId) return;
+    if (!confirm('Delete this project? Chats will be unlinked. The index will be wiped.')) return;
+    try {
+      await fetch(`/api/projects/${_editingProjectId}?wipe_index=true`, { method: 'DELETE' });
+      closeProjectSettings();
+      await loadProjects();
+      lincolnChat?.showToast?.('Project deleted', 'info');
+    } catch (err) {
+      console.error('Delete project error:', err);
+    }
+  }
+
+  async function indexActiveProject() {
+    if (!_editingProjectId) return;
+    const btn = document.getElementById('projectIndexBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="ti ti-refresh"></i> Indexing…'; }
+    try {
+      await fetch(`/api/projects/${_editingProjectId}/index`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force_rebuild: true }),
+      });
+      startIndexPoll(_editingProjectId);
+      lincolnChat?.showToast?.('Index started', 'info');
+    } catch (err) {
+      lincolnChat?.showToast?.(`Index error: ${err.message}`, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="ti ti-refresh"></i> Index now'; }
+    }
+  }
+
+  function onPathInput(inputId, resolvedId) {
+    const val = document.getElementById(inputId)?.value.trim() || '';
+    const el  = document.getElementById(resolvedId);
+    if (el) el.textContent = val ? 'Path set: ' + val : '';
+  }
+
+  function openFolderPicker(inputId, resolvedId) {
+    _nativeFolderPick(inputId);
+  }
+
+  // ── Context tab ───────────────────────────────────────────────────────────
+
+  async function _loadProjectContext(projectId) {
+    const ta     = document.getElementById('projContextTextarea');
+    const status = document.getElementById('projContextSaveStatus');
+    if (!ta) return;
+    if (status) status.textContent = 'Loading…';
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/context`);
+      const data = await res.json();
+      ta.value      = data.context || '';
+      _contextDirty = false;
+      if (status) status.textContent = '';
+    } catch (err) {
+      if (status) status.textContent = 'Failed to load context';
+    }
+  }
+
+  function _markContextDirty() {
+    _contextDirty = true;
+    const status = document.getElementById('projContextSaveStatus');
+    if (status) status.textContent = 'Unsaved changes';
+  }
+
+  async function _saveProjectContext() {
+    if (!_editingProjectId) return;
+    const ta     = document.getElementById('projContextTextarea');
+    const status = document.getElementById('projContextSaveStatus');
+    const text   = ta?.value || '';
+    if (status) status.textContent = 'Saving…';
+    try {
+      const res = await fetch(`/api/projects/${_editingProjectId}/context`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ context: text }),
+      });
+      if (!res.ok) throw new Error('Save failed');
+      _contextDirty = false;
+      if (status) status.textContent = 'Saved ✓';
+      setTimeout(() => { if (status) status.textContent = ''; }, 2500);
+      lincolnChat?.showToast?.('Project context saved', 'success');
+    } catch (err) {
+      if (status) status.textContent = 'Error: ' + err.message;
+    }
+  }
+
+  // ── Files tab ─────────────────────────────────────────────────────────────
+
+  async function _loadProjectFiles(projectId) {
+    const list    = document.getElementById('projFilesList');
+    const countEl = document.getElementById('projFilesCount');
+    if (!list) return;
+    if (countEl) countEl.textContent = 'Loading files…';
+    list.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--text-muted)">Loading…</div>';
+
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/files`);
+      const data = await res.json();
+      if (!res.ok) {
+        list.innerHTML = `<div style="padding:16px;font-size:12px;color:var(--text-danger)">${_esc(data.error)}</div>`;
+        return;
+      }
+      const files = data.files || [];
+      if (countEl) countEl.textContent = `${files.length} file${files.length !== 1 ? 's' : ''} in RAG source folder`;
+
+      if (!files.length) {
+        list.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--text-muted)">No files found. Set the RAG source folder in the Settings tab first.</div>';
+        return;
+      }
+
+      list.innerHTML = files.map(f => `
+        <div class="proj-file-row" style="display:flex;align-items:center;gap:8px;padding:7px 14px;border-bottom:0.5px solid var(--border);font-size:12px">
+          <i class="ti ti-${f.is_indexable ? 'file-code' : 'file'}"
+             style="font-size:13px;color:${f.is_indexable ? 'var(--text-accent)' : 'var(--text-muted)'};flex-shrink:0"></i>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:500;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+                 title="${_esc(f.relative_path)}">${_esc(f.name)}</div>
+            <div style="color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+                 title="${_esc(f.relative_path)}">${_esc(f.relative_path)}</div>
+          </div>
+          <span style="color:var(--text-muted);flex-shrink:0;font-size:11px">${f.size_kb} KB</span>
+          <span style="color:${f.is_indexable ? 'var(--text-success)' : 'var(--text-muted)'};flex-shrink:0;font-size:10px;font-weight:500"
+                title="${f.is_indexable ? 'Will be indexed by RAG' : 'Not indexed'}">
+            ${f.is_indexable ? 'RAG' : '—'}
+          </span>
+          <button onclick="lincolnSidebar._deleteProjectFile('${_esc(f.relative_path)}')"
+                  title="Delete this file from project folder"
+                  style="flex-shrink:0;border:none;background:none;cursor:pointer;color:var(--text-muted);padding:2px 4px;border-radius:3px"
+                  onmouseover="this.style.color='var(--text-danger)'"
+                  onmouseout="this.style.color='var(--text-muted)'">
+            <i class="ti ti-trash" style="font-size:13px"></i>
+          </button>
+        </div>
+      `).join('');
+
+    } catch (err) {
+      list.innerHTML = `<div style="padding:16px;font-size:12px;color:var(--text-danger)">Error: ${_esc(err.message)}</div>`;
+    }
+  }
+
+  async function _deleteProjectFile(relativePath) {
+    if (!_editingProjectId) return;
+    if (!confirm(`Delete "${relativePath}" from the project folder?\n\nThis permanently removes the file from disk and triggers a re-index.`)) return;
+
+    try {
+      const res = await fetch(`/api/projects/${_editingProjectId}/files`, {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ relative_path: relativePath }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        lincolnChat?.showToast?.(`Delete failed: ${data.error}`, 'error');
+        return;
+      }
+      lincolnChat?.showToast?.(`Deleted ${relativePath} — re-indexing…`, 'success');
+      // Reload file list and start polling
+      await _loadProjectFiles(_editingProjectId);
+      startIndexPoll(_editingProjectId);
+    } catch (err) {
+      lincolnChat?.showToast?.(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  // Expose _loadProjectFiles publicly so the refresh button in HTML can call it
+  function _loadProjectFilesPublic() {
+    if (_editingProjectId) _loadProjectFiles(_editingProjectId);
+  }
+
+  // ── Aider launcher ────────────────────────────────────────────────────────
+
+  async function launchAider() {
+    const projectId = _activeProjectId;
+    if (!projectId) {
+      lincolnChat?.showToast?.('Select a project first', 'info');
+      return;
+    }
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/aider`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        lincolnChat?.showToast?.(`Aider error: ${data.error}`, 'error');
+      } else {
+        lincolnChat?.showToast?.(data.message || 'Aider launched', 'success');
+      }
+    } catch (err) {
+      lincolnChat?.showToast?.(`Aider error: ${err.message}`, 'error');
     }
   }
 
@@ -726,7 +1088,20 @@ const lincolnSidebar = (() => {
     closeNewProjectPanel,
     createProject,
     openProjectSettings,
+    closeProjectSettings,
+    saveProjectSettings,
+    deleteActiveProject,
+    indexActiveProject,
+    toggleWriteAccess,
+    onPathInput,
+    openFolderPicker,
+    _switchProjTab,
+    _markContextDirty,
+    _saveProjectContext,
+    _loadProjectFiles: _loadProjectFilesPublic,
+    _deleteProjectFile,
     openFileBrowser,
+    launchAider,
     startIndexPoll,
     hasSelection,
     clearSelection,

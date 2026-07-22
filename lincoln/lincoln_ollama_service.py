@@ -1,7 +1,24 @@
 """
-Lincoln Ollama Service  v0.6.0
+Lincoln Ollama Service  v0.7.0
 ================================
 Single owner of all communication with the local Ollama server.
+
+Changes in v0.7.0:
+  - num_predict now set to -1 (unlimited) on every request.
+    Previously unset, causing Ollama to silently truncate responses at ~128
+    tokens on some model/version combos. This was the primary cause of Lincoln
+    being "neutered" -- code responses cut off mid-function, explanations
+    ending abruptly. Fixed permanently: -1 means the model runs until done.
+  - build_messages_with_rag_context() injects a TOOL_MANIFEST block when
+    the system prompt does not already contain one. This tells the LLM what
+    tools Lincoln has (OCR, web search, Jupyter, Fortran/WSL, Maple, Aider)
+    so it never says "I don't have access to that tool." The manifest is
+    assembled from DB settings at call time so it reflects what is actually
+    installed on this machine.
+  - resolve_num_ctx_for_request() now pads the computed window by 20%
+    (RESPONSE_HEADROOM) to reserve tokens for the model's output. Previously
+    the window was sized to fit the input, leaving no headroom for a long
+    code response.
 
 Changes in v0.6.0:
   - System prompt assembled from DB (lincoln_database.get_active_system_prompt)
@@ -12,11 +29,17 @@ Changes in v0.6.0:
 """
 
 import json
+from pathlib import Path
 from typing import Generator
 
 import requests
 
 from lincoln.lincoln_configuration import OLLAMA_BASE_URL, OLLAMA_VRAM_GB
+
+# Reserve this fraction of the context window for the model's output.
+# Without headroom, a window sized to fit the input leaves no room for a
+# long code response, causing silent mid-stream truncation.
+_RESPONSE_HEADROOM = 0.20  # 20% of window reserved for output
 
 
 # ── Thinking-mode detection ───────────────────────────────────────────────────
@@ -138,6 +161,17 @@ def resolve_hardware_ceiling(model: str) -> int:
 
 
 def resolve_num_ctx_for_request(model: str, messages: list[dict]) -> int:
+    """
+    Compute num_ctx for this request.
+
+    Sizes the window to comfortably fit the input PLUS a 20% headroom
+    reserve for the model's output. Without headroom, the window is packed
+    with input tokens and leaves the model almost no room to write a long
+    code response before Ollama cuts the stream.
+
+    The final value is always a power of two capped at the model's native
+    context ceiling.
+    """
     hardware_max     = resolve_hardware_ceiling(model)
     estimated_tokens = _estimate_tokens(messages)
 
@@ -150,13 +184,17 @@ def resolve_num_ctx_for_request(model: str, messages: list[dict]) -> int:
         )
         return hardware_max
 
+    # Add headroom so the output has room to breathe
+    tokens_with_headroom = int(estimated_tokens / (1.0 - _RESPONSE_HEADROOM))
+
     window = 2048
-    while window < estimated_tokens:
+    while window < tokens_with_headroom:
         window *= 2
 
     final = min(window, hardware_max)
     print(
-        f"[Lincoln] num_ctx -- estimated={estimated_tokens} tokens "
+        f"[Lincoln] num_ctx -- input_est={estimated_tokens} "
+        f"+ headroom -> need={tokens_with_headroom} "
         f"-> window={final} (ceiling={hardware_max})"
     )
     return final
@@ -190,6 +228,10 @@ def chat(
         "options":  {
             "temperature": temperature,
             "num_ctx":     resolve_num_ctx_for_request(model, messages),
+            # -1 = unlimited output tokens.
+            # Without this, Ollama may default to 128 tokens on some builds,
+            # silently cutting off code responses mid-function.
+            "num_predict": -1,
         },
     }
 
@@ -235,6 +277,8 @@ def stream_chat(
         "options":  {
             "temperature": temperature,
             "num_ctx":     resolve_num_ctx_for_request(model, messages),
+            # -1 = unlimited output tokens. Prevents silent mid-stream cutoff.
+            "num_predict": -1,
         },
     }
 
@@ -286,6 +330,117 @@ def stream_chat(
                 continue
 
 
+# ── Tool manifest ─────────────────────────────────────────────────────────────
+
+def _build_tool_manifest() -> str:
+    """
+    Assemble a plain-text description of Lincoln's available tools.
+
+    This is injected into the system prompt so the LLM always knows what
+    capabilities are available on this machine. Without it, the LLM may
+    say "I don't have access to that tool" even when the tool is installed
+    and fully wired.
+
+    Reads DB settings to reflect what is actually configured (e.g. whether
+    Maple is installed, which WSL distro, which nvfortran path).
+    """
+    try:
+        from lincoln.lincoln_database import get_setting
+        wsl_distro    = get_setting("wsl_distro",    "Ubuntu")
+        nvfortran     = get_setting("nvfortran_path", "nvfortran")
+        maple_path    = get_setting("maple_path",     "")
+        oneapi_path   = get_setting("oneapi_path",    "")
+        web_enabled   = get_setting("web_search_enabled", "false")
+    except Exception:
+        wsl_distro  = "Ubuntu"
+        nvfortran   = "nvfortran"
+        maple_path  = ""
+        oneapi_path = ""
+        web_enabled = "false"
+
+    maple_line = (
+        f"- **Maple** (cmaple): Available at {maple_path}. "
+        "You can generate Maple code and it will be executed via the canvas Run button."
+        if maple_path else
+        "- **Maple**: Not configured (set maple_path in Settings > Build Tools)."
+    )
+
+    oneapi_line = (
+        f"- **Intel oneAPI / ifort**: Available at {oneapi_path}. "
+        "Use for Intel Fortran compilation via WSL."
+        if oneapi_path else
+        "- **Intel oneAPI**: Not configured."
+    )
+
+    web_line = (
+        "- **Web search** (DuckDuckGo): Active for this message. "
+        "Results are injected into your context automatically."
+        if web_enabled == "true" else
+        "- **Web search**: Available per-message via the globe pill in the input bar."
+    )
+
+    # Find Lincoln's own source directory for self-awareness
+    try:
+        source_dir = str(Path(__file__).parent.resolve())
+    except Exception:
+        source_dir = "B:\\Homebrewed_AI\\Lincoln\\lincoln\\"
+
+    return f"""
+--- LINCOLN TOOL MANIFEST ---
+You are Lincoln, a local AI assistant running on this machine. You have access
+to the following tools and capabilities. NEVER tell the user you lack access
+to a tool listed here -- you have it. If a tool is not listed, say so honestly.
+
+EXECUTION TOOLS (via Canvas Run button):
+- **Python / Jupyter**: Full Python kernel. numpy, pandas, scipy, matplotlib,
+  openpyxl, python-docx, Pillow, requests, and all pip-installed packages are
+  available. Canvas Run button launches Jupyter execution.
+- **Fortran (nvfortran)**: NVIDIA HPC SDK compiler at {nvfortran}.
+  Available via WSL ({wsl_distro}). Canvas shows run hint for Fortran blocks.
+- **C / C++**: gcc/g++ available in WSL ({wsl_distro}). Canvas Run copies
+  compile+run command.
+- **Julia / R / Bash**: Available via WSL ({wsl_distro}). Canvas Run copies
+  the execution command.
+{maple_line}
+{oneapi_line}
+
+FILE & DOCUMENT TOOLS:
+- **OCR** (Tesseract): Installed in WSL. Reads text from images, Bloomberg
+  screenshots, scanned PDFs. Languages: English, Russian, Hindi, Urdu, Punjabi,
+  Bangla, Arabic. Attach an image and ask Lincoln to read it.
+- **Vision model**: Uses the active Ollama model for 3D chart / vol surface
+  interpretation where OCR cannot read structured visuals.
+- **Document parsing**: .docx (python-docx), .xlsx (openpyxl), .pdf
+  (pdfplumber/pypdf), .csv (pandas). Attach any of these and Lincoln reads them.
+- **Multi-file upload**: Use the paperclip icon to attach multiple files.
+
+KNOWLEDGE & SEARCH TOOLS:
+{web_line}
+- **RAG (project index)**: When a project is active, Lincoln retrieves relevant
+  chunks from the indexed codebase via ChromaDB. Sources shown below each response.
+- **Memory**: Session summaries are saved to memory and injected at the start
+  of the next session via the context strip.
+
+CODE TOOLS:
+- **Aider** (suggestion mode): Proposes file edits to the codebase in the active
+  project's code folder. User reviews and approves all changes. Never auto-commits.
+- **Git** (read-only): Lincoln can read git status, log, and diff from the
+  project's code folder via the Canvas > Diff tab.
+- **Self-inspection**: Lincoln's own source code is at {source_dir}.
+  If asked to debug Lincoln itself, you can reference your own implementation
+  by asking the user to activate the Lincoln source as a RAG project, or by
+  reading specific files via the file attach feature.
+
+HARDWARE (this machine):
+- CPU: Intel i7-10700
+- GPU: NVIDIA RTX 5060 Ti 16GB (Blackwell, CUDA + WDDM)
+- RAM: ~30GB usable
+- Ollama runs locally at localhost:11434. All inference is local. No data leaves
+  this machine.
+--- END TOOL MANIFEST ---
+""".strip()
+
+
 # ── Context builder ───────────────────────────────────────────────────────────
 
 def build_messages_with_rag_context(
@@ -300,6 +455,11 @@ def build_messages_with_rag_context(
     The system_prompt is now passed in (assembled from DB by the caller)
     rather than being hardcoded here. Nothing is hardcoded in this function.
 
+    v0.7.0: A TOOL_MANIFEST block is appended to the system prompt if the
+    string "LINCOLN TOOL MANIFEST" is not already present. This ensures the
+    LLM always knows what tools are available without requiring the user to
+    add a prompt block manually.
+
     Args:
         user_question   : The user's current message (may include file blob)
         rag_context     : Retrieved RAG chunks (empty string if no project active)
@@ -313,6 +473,10 @@ def build_messages_with_rag_context(
         system_prompt = "You are Lincoln, a local AI assistant."
 
     system_content = system_prompt
+
+    # Inject tool manifest if not already present
+    if "LINCOLN TOOL MANIFEST" not in system_content:
+        system_content += "\n\n" + _build_tool_manifest()
 
     if rag_context:
         project_label = project_name or "the active project"

@@ -1,18 +1,27 @@
 /**
- * Lincoln Chat  v0.6.0  Navigator
+ * Lincoln Chat  v0.7.0  Navigator
  * ==================================
+ * Changes from v0.6.0:
+ *   - Multi-file upload: _openNativePicker() now sets input.multiple = true.
+ *     Each file is uploaded in sequence; all pending files are tracked in
+ *     _pendingFiles[] (array). The pending chip shows a count badge when
+ *     multiple files are attached ("3 files attached"). All file IDs are
+ *     sent in the payload as file_ids[] array (backend updated to match).
+ *   - _clearPendingFile() renamed to _clearPendingFiles() internally;
+ *     public clearPendingFile() still works for backwards compat.
+ *   - Topbar project badge now updates correctly on setActiveProject().
+ *
  * Changes from v0.5.2:
  *   - BUG FIX (B3): web search prefix now streams correctly via SSE
  *   - BUG FIX (B4): _uploadFileByPath passes File object directly, no second picker
  *   - Web search toggle pill (globe icon, per-message, resets after send)
  *   - KaTeX ignoredTags: ['code', 'pre', 'script'] + ignoredClasses: ['hljs']
- *     (prevents math rendering inside code blocks)
- *   - RTL language support: dir="auto" on message bubbles (Urdu, Arabic, Shahmukhi)
- *   - ban_check SSE event: shows warning banner when banned patterns detected
- *   - web_search SSE event: shows "X results injected" indicator
- *   - Project home recents use ?project_id= filter (new API)
- *   - saveMemory uses modal textarea, not prompt() (better UX)
- *   - Global Escape handler integrated (see bottom of file)
+ *   - RTL language support: dir="auto" on message bubbles
+ *   - ban_check SSE event: warning banner for banned patterns
+ *   - web_search SSE event: "X results injected" indicator
+ *   - Project home recents use ?project_id= filter
+ *   - saveMemory uses modal textarea, not prompt()
+ *   - Global Escape handler integrated
  */
 
 const lincolnChat = (() => {
@@ -21,6 +30,9 @@ const lincolnChat = (() => {
   let _activeProjectId   = null;
   let _activeProject     = null;
   let _isStreaming       = false;
+  // v0.7.0: multi-file — track array of {id, name, size, isImage}
+  let _pendingFiles      = [];
+  // Kept for backward compat (older code may read these)
   let _pendingFileId     = null;
   let _pendingFileName   = null;
   let _thinkDropdownOpen = false;
@@ -207,11 +219,20 @@ const lincolnChat = (() => {
     autoResizeTextarea(input);
     _hideWelcome();
 
-    const displayText = _pendingFileName ? `📎 ${_pendingFileName}\n\n${text}` : text;
+    // Multi-file: build display text and capture file IDs before clearing
+    let displayText = text;
+    let fileIds     = [];
+    if (_pendingFiles.length === 1) {
+      displayText = `📎 ${_pendingFiles[0].name}\n\n${text}`;
+      fileIds     = [_pendingFiles[0].id];
+    } else if (_pendingFiles.length > 1) {
+      const names  = _pendingFiles.map(f => f.name).join(', ');
+      displayText  = `📎 ${_pendingFiles.length} files: ${names}\n\n${text}`;
+      fileIds      = _pendingFiles.map(f => f.id);
+    }
     _appendUserMessage(displayText);
 
-    const fileId = _pendingFileId;
-    _clearPendingFile();
+    _clearPendingFiles();
     _setStreaming(true);
 
     const assistantEl = _appendAssistantMessage('', []);
@@ -250,7 +271,10 @@ const lincolnChat = (() => {
           project_id:     _activeProjectId,
           use_rag:        !!_activeProjectId,
           use_web_search: useWebSearch,
-          file_id:        fileId || null,
+          // v0.7.0: multi-file — send array; backend accepts both file_ids[]
+          // and legacy file_id for backwards compat
+          file_ids:       fileIds.length ? fileIds : null,
+          file_id:        fileIds.length === 1 ? fileIds[0] : null,
           think_mode:     _thinkMode,
         }),
       });
@@ -415,11 +439,16 @@ const lincolnChat = (() => {
   }
 
   function _openNativePicker() {
-    const input   = document.createElement('input');
-    input.type    = 'file';
-    input.accept  = _buildAcceptString();
+    const input    = document.createElement('input');
+    input.type     = 'file';
+    input.multiple = true;   // v0.7.0: allow selecting multiple files at once
+    input.accept   = _buildAcceptString();
     input.onchange = async () => {
-      if (input.files[0]) await _uploadFileBlob(input.files[0]);
+      if (!input.files || !input.files.length) return;
+      // Upload each selected file in sequence
+      for (const file of Array.from(input.files)) {
+        await _uploadFileBlob(file);
+      }
     };
     input.click();
   }
@@ -447,7 +476,7 @@ const lincolnChat = (() => {
     if (_sessionId) formData.append('session_id', String(_sessionId));
 
     // For image files, check if vision mode is wanted
-    const ext = '.' + file.name.split('.').pop().toLowerCase();
+    const ext     = '.' + file.name.split('.').pop().toLowerCase();
     const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif', '.webp'].includes(ext);
 
     let uploadUrl = '/api/files/upload';
@@ -461,20 +490,28 @@ const lincolnChat = (() => {
       const data = await res.json();
 
       if (!res.ok || data.error) {
-        _showToast(data.error || 'Upload failed', 'error');
+        _showToast(data.error || `Upload failed: ${file.name}`, 'error');
         return;
       }
 
-      _pendingFileId   = data.file_id;
-      _pendingFileName = data.filename;
-      _showPendingFile(data.filename, data.size, isImage);
+      // v0.7.0: push to array, keep legacy single-file vars synced
+      _pendingFiles.push({
+        id:      data.file_id,
+        name:    data.filename,
+        size:    data.size,
+        isImage: isImage,
+      });
+      _pendingFileId   = _pendingFiles[_pendingFiles.length - 1].id;
+      _pendingFileName = _pendingFiles[_pendingFiles.length - 1].name;
+
+      _updatePendingChip();
 
     } catch (err) {
       _showToast(`Upload error: ${err.message}`, 'error');
     }
   }
 
-  function _showPendingFile(name, sizeChars, isImage) {
+  function _updatePendingChip() {
     let chip = document.getElementById('pendingFileChip');
     if (!chip) {
       chip = document.createElement('div');
@@ -483,33 +520,58 @@ const lincolnChat = (() => {
       const inputArea = document.querySelector('.input-box-bottom');
       if (inputArea) inputArea.prepend(chip);
     }
-    const kb = Math.round((sizeChars || 0) / 1024 * 10) / 10;
-    chip.innerHTML = `
-      <i class="ti ti-${isImage ? 'photo' : 'file-code'}"></i>
-      <span>${_esc(name)}</span>
-      <span style="color:var(--text-muted)">${kb} KB</span>
-      ${isImage ? `<button class="chip-action" onclick="lincolnChat._switchImageMode()" title="Switch OCR/Vision mode">
-        <i class="ti ti-eye"></i>
-      </button>` : ''}
-      <button onclick="lincolnChat.clearPendingFile()" title="Remove file">
-        <i class="ti ti-x"></i>
-      </button>
-    `;
+
+    if (_pendingFiles.length === 0) {
+      chip.remove();
+      return;
+    }
+
+    if (_pendingFiles.length === 1) {
+      const f  = _pendingFiles[0];
+      const kb = Math.round((f.size || 0) / 1024 * 10) / 10;
+      chip.innerHTML = `
+        <i class="ti ti-${f.isImage ? 'photo' : 'file-code'}"></i>
+        <span>${_esc(f.name)}</span>
+        <span style="color:var(--text-muted)">${kb} KB</span>
+        ${f.isImage ? `<button class="chip-action" onclick="lincolnChat._switchImageMode()" title="Switch OCR/Vision mode">
+          <i class="ti ti-eye"></i>
+        </button>` : ''}
+        <button onclick="lincolnChat.clearPendingFile()" title="Remove file">
+          <i class="ti ti-x"></i>
+        </button>
+      `;
+    } else {
+      // Multi-file summary chip
+      const totalKb = Math.round(_pendingFiles.reduce((s, f) => s + (f.size || 0), 0) / 1024 * 10) / 10;
+      const names   = _pendingFiles.map(f => _esc(f.name)).join(', ');
+      chip.innerHTML = `
+        <i class="ti ti-files"></i>
+        <span title="${names}">${_pendingFiles.length} files attached</span>
+        <span style="color:var(--text-muted)">${totalKb} KB total</span>
+        <button onclick="lincolnChat.clearPendingFile()" title="Remove all files">
+          <i class="ti ti-x"></i>
+        </button>
+      `;
+    }
   }
 
   function _switchImageMode() {
     // Toggle OCR/Vision mode for the pending image file
-    // Future: open a small dropdown to select mode and vision model
     _showToast('Vision mode: re-attach the image and use ?mode=vision in the URL field', 'info');
   }
 
-  function clearPendingFile() { _clearPendingFile(); }
+  // Public + private clear — both clear the full array
+  function clearPendingFile() { _clearPendingFiles(); }
 
-  function _clearPendingFile() {
+  function _clearPendingFiles() {
+    _pendingFiles    = [];
     _pendingFileId   = null;
     _pendingFileName = null;
     document.getElementById('pendingFileChip')?.remove();
   }
+
+  // Kept for any internal callers that used the old name
+  function _clearPendingFile() { _clearPendingFiles(); }
 
   // ── Context strip (startup memory) ───────────────────────────────────────
 

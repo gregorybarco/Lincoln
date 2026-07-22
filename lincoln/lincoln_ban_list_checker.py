@@ -1,18 +1,27 @@
 """
-Lincoln Ban List Checker  v0.6.0
+Lincoln Ban List Checker  v0.7.0
 ==================================
-Scans AI-generated code for patterns banned in the OptionsPricing project.
-Based on ProjectA_CODE_PRACTICES.md Section 2.
+Scans AI-generated code for two categories of problems:
 
-Called optionally from lincoln_routes_chat.py when the active project
-is OptionsPricing (or any project flagged as 'enforce_ban_list' in future).
+1. PROJECT BAN LIST -- patterns banned in OptionsPricing (and similar projects).
+   Based on ProjectA_CODE_PRACTICES.md Section 2. These patterns indicate
+   architectural violations (wrong compiler, hardcoded paths, etc.).
 
-Returns a list of violations so the UI can display a warning banner
-before the user acts on generated code.
+2. PROTECTED FUNCTIONS -- Lincoln's own UI/backend symbols.
+   Patterns loaded from build_decisions/PROTECTED_FUNCTIONS.md.
+   If generated code redefines lincolnChat, sendMessage, lincolnCanvas etc.,
+   it will silently break the Lincoln UI when saved or run. These checks fire
+   WARNING banners that tell the user before they take action.
+
+Called from lincoln_routes_chat.py on every response that contains a code block.
+Violations are returned as a list and forwarded to the UI as a 'ban_check' SSE
+event. The UI shows a collapsible warning banner. Nothing is blocked -- the user
+always retains the final say.
 """
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -91,17 +100,75 @@ _BAN_PATTERNS = [
     },
 ]
 
+# ── Protected Lincoln UI / backend functions ──────────────────────────────────
+# These patterns detect generated code that would overwrite Lincoln's own
+# internals. Detailed definitions are in build_decisions/PROTECTED_FUNCTIONS.md.
+
+_PROTECTED_PATTERNS = [
+    {
+        "name":   "Redefines Lincoln JS namespace",
+        "reason": "This code declares a top-level symbol with the same name as a "
+                  "Lincoln module (lincolnChat, lincolnCanvas, etc.). Saving this "
+                  "will overwrite Lincoln's UI. Rename the variable.",
+        "regex":  r"(?:^|\n)\s*(?:const|let|var|function)\s+"
+                  r"(lincolnChat|lincolnCanvas|lincolnSidebar|lincolnSettings|lincolnCanvasUI)\b",
+        "flags":  re.MULTILINE,
+    },
+    {
+        "name":   "Reassigns critical Lincoln method",
+        "reason": "This code replaces a core Lincoln method via assignment "
+                  "(e.g. lincolnChat.sendMessage = ...). This will break Lincoln "
+                  "immediately. Use a different function name.",
+        "regex":  r"\b(lincolnChat|lincolnSettings|lincolnCanvas|lincolnSidebar)\s*\.\s*"
+                  r"(sendMessage|loadSession|newSession|setActiveProject|open|close|"
+                  r"loadModels|toggleModelDropdown|selectModel|addPromptBlock|"
+                  r"pinCodeBlock|clear|switchTab|loadHistory|loadMemory|"
+                  r"handleInputKeydown|init|toggleWebSearch|toggleThinkDropdown)\s*=",
+        "flags":  re.MULTILINE,
+    },
+    {
+        "name":   "Redefines protected Python function",
+        "reason": "This code defines a function with the same name as a Lincoln "
+                  "core function. If saved via Aider, it will replace Lincoln's "
+                  "implementation. Use a different function name.",
+        "regex":  r"^\s*def\s+(initialise_database|get_active_system_prompt|"
+                  r"stream_chat|build_messages_with_rag_context|"
+                  r"resolve_num_ctx_for_request|send_message|create_new_session|"
+                  r"get_all_settings|save_settings|get_setting|"
+                  r"check_against_ban_list)\s*\(",
+        "flags":  re.MULTILINE,
+    },
+    {
+        "name":   "Writes to protected HTML ID",
+        "reason": "This HTML uses an id= that Lincoln already owns. This will "
+                  "conflict with Lincoln's own elements and break the UI.",
+        "regex":  r"""id\s*=\s*["'](chatMessages|chatInput|sendBtn|canvasBody|"""
+                  r"""settingsOverlay|modelDropdown|modelPill|thinkModePill|"""
+                  r"""thinkDropdown|webSearchPill|toastContainer|"""
+                  r"""topbarProjectBadge|globalPromptBlocks|pendingFileChip|"""
+                  r"""contextStrip|settingsPanelContent)["']""",
+        "flags":  re.IGNORECASE,
+    },
+]
+
+
 # Non-ASCII character detection (ASCII-127 law)
 _NON_ASCII_REGEX = re.compile(r"[^\x00-\x7F]")
 
 
-def check_against_ban_list(code: str, include_ascii_check: bool = True) -> list[BanViolation]:
+def check_against_ban_list(
+    code:                str,
+    include_ascii_check: bool = True,
+    check_protected:     bool = True,
+) -> list[BanViolation]:
     """
-    Scan generated code for banned patterns.
+    Scan generated code for banned patterns AND protected Lincoln symbols.
 
     Args:
         code                : The code string to scan (from canvas or response)
         include_ascii_check : Also flag non-ASCII characters (ASCII-127 law)
+        check_protected     : Also check for Lincoln protected function patterns
+                              (v0.7.0 -- prevents generated code breaking Lincoln UI)
 
     Returns:
         List of BanViolation objects. Empty list means no violations found.
@@ -109,6 +176,7 @@ def check_against_ban_list(code: str, include_ascii_check: bool = True) -> list[
     violations = []
     lines      = code.splitlines()
 
+    # --- Project ban list (OptionsPricing architectural rules) ---------------
     for ban in _BAN_PATTERNS:
         pattern = re.compile(ban["regex"], ban["flags"])
         for i, line in enumerate(lines, start=1):
@@ -120,6 +188,23 @@ def check_against_ban_list(code: str, include_ascii_check: bool = True) -> list[
                     line_text=line.strip()[:120],
                 ))
 
+    # --- Protected Lincoln functions (always checked, any project) -----------
+    if check_protected:
+        # Run multi-line patterns against the full code string (for MULTILINE)
+        for prot in _PROTECTED_PATTERNS:
+            pattern = re.compile(prot["regex"], prot["flags"])
+            for match in pattern.finditer(code):
+                # Find the line number of the match
+                line_number = code[:match.start()].count("\n") + 1
+                line_text   = lines[line_number - 1].strip()[:120] if line_number <= len(lines) else ""
+                violations.append(BanViolation(
+                    pattern_name="⚠ PROTECTED: " + prot["name"],
+                    reason=prot["reason"],
+                    line_number=line_number,
+                    line_text=line_text,
+                ))
+
+    # --- ASCII-127 law -------------------------------------------------------
     if include_ascii_check:
         for i, line in enumerate(lines, start=1):
             match = _NON_ASCII_REGEX.search(line)
