@@ -1,5 +1,5 @@
 """
-Lincoln Settings Routes  v0.6.0
+Lincoln Settings Routes  v0.7.2
 ==================================
 Flask routes for reading and writing all Lincoln settings.
 
@@ -24,9 +24,13 @@ Endpoints:
 
   GET  /api/projects/<id>/prompts         Project-level prompt blocks
   POST /api/projects/<id>/prompts         Create a project prompt block
+  
+  POST /api/settings/open-terminal        Admin: Open Dev Terminal
+  POST /api/settings/git-reset            Admin: Git Reset Hard
 """
 
 import os
+import subprocess
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
@@ -431,3 +435,38 @@ def reorder_project_prompts(project_id: int):
         return jsonify({"error": "ids must be a list"}), 400
     reorder_system_prompts(ids)
     return jsonify({"status": "ok"})
+
+
+# ── ADMIN ACTIONS ─────────────────────────────────────────────────────────────
+
+@settings_blueprint.route("/api/settings/open-terminal", methods=["POST"])
+def open_dev_terminal():
+    """
+    Opens a detached developer terminal window on the host OS.
+    """
+    try:
+        # Assuming Windows host (starts a new command prompt window)
+        subprocess.Popen("start cmd", shell=True)
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"error": f"Failed to open terminal: {str(e)}"}), 500
+
+
+@settings_blueprint.route("/api/settings/git-reset", methods=["POST"])
+def git_reset_hard():
+    """
+    Executes a hard git reset on the Lincoln repository.
+    """
+    try:
+        # Runs git reset --hard HEAD in the current working directory (Lincoln root)
+        result = subprocess.run(
+            ["git", "reset", "--hard", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return jsonify({"status": "success", "output": result.stdout})
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": f"Git reset failed: {e.stderr}"}), 500
+    except Exception as e:
+        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
