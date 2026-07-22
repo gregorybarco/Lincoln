@@ -604,10 +604,6 @@ const lincolnChat = (() => {
             if (event.type === 'tool_denied') {
               _showToast(`Tool denied: ${event.tool_name}`, 'info');
             }
-            if (event.type === 'tool_output') {
-              console.log(`[Lincoln] ${event.tool_name} output:`, event.output);
-              _showToast(`Output: ${event.output.slice(0, 80)}`, 'info');
-            }
 
             if (event.type === 'approval_required') {
               // Nested approval — another gated tool in the same ReAct chain
@@ -621,6 +617,21 @@ const lincolnChat = (() => {
               cursor.remove();
               if (bubbleEl && fullText) {
                 _renderFinalMessage(bubbleEl, fullText, [], targetEl);
+                // Pin to canvas
+                if (typeof lincolnCanvas !== 'undefined') {
+                  const blocks = lincolnCanvas.extractCodeBlocks(fullText);
+                  blocks.forEach((block, i) => {
+                    const suffix   = blocks.length > 1 ? `_part${i + 1}` : '';
+                    const baseName = ('executed_code' + suffix + (lincolnChat._langExt?.[block.language] || '.py'));
+                    lincolnCanvas.pinCodeBlock({
+                      language:    block.language,
+                      filename:    lincolnCanvas.resolveFilename(baseName, sessionId),
+                      content:     block.content,
+                      projectName: '',
+                      sessionId:   sessionId,
+                    });
+                  });
+                }
               }
               cardEl?.classList.add('approval-card-dismissed');
               _scrollToBottom();
