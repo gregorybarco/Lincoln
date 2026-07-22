@@ -337,7 +337,13 @@ def _react_loop(
 
         if tool_event is None:
             # No tool call — we have the final text response. Done.
-            return accumulated_text, None   # caller saves the message
+            # IMPORTANT: this is a generator (it has yield statements above),
+            # so a plain `return accumulated_text, None` would only attach the
+            # tuple to StopIteration.value, which a normal `for item in gen:`
+            # loop silently discards. We must yield the tuple so the caller's
+            # `elif isinstance(item, tuple): result = item` actually sees it.
+            yield (accumulated_text, None)
+            return
 
         # ── Tool call detected ────────────────────────────────────────────────
         tool_name    = tool_event["tool_name"]
@@ -389,13 +395,15 @@ def _react_loop(
                 # Web search toggle is OFF — gate it like a write tool
                 save_pending_tool_call(session_id, tool_name, tool_call_id, arguments)
                 yield f"data: {json.dumps({'type': 'approval_required', 'tool_name': tool_name, 'tool_call_id': tool_call_id, 'arguments': arguments, 'tier': 'search', 'reason': 'Web search toggle is OFF. Enable it to allow this search, or approve this specific query.'})}\n\n"
-                return None, ollama_messages  # paused
+                yield (None, ollama_messages)  # paused
+                return
 
         # ── WRITE_TOOLS: always gate ──────────────────────────────────────────
         elif tier == "write":
             save_pending_tool_call(session_id, tool_name, tool_call_id, arguments)
             yield f"data: {json.dumps({'type': 'approval_required', 'tool_name': tool_name, 'tool_call_id': tool_call_id, 'arguments': arguments, 'tier': 'write', 'reason': 'This action requires your approval before execution.'})}\n\n"
-            return None, ollama_messages  # paused
+            yield (None, ollama_messages)  # paused
+            return
 
         else:
             # Unknown tool — tell the LLM
@@ -406,7 +414,8 @@ def _react_loop(
 
     # Max iterations reached
     yield f"data: {json.dumps({'type': 'error', 'message': f'ReAct loop reached maximum iterations ({_MAX_REACT_ITERATIONS}). Stopping.'})}\n\n"
-    return [], None
+    yield ([], None)
+    return
 
 
 # ── Send message ──────────────────────────────────────────────────────────────
@@ -655,17 +664,29 @@ def resolve_tool():
             tool_result = f"User denied permission to execute '{tool_name}'."
             yield f"data: {json.dumps({'type': 'tool_denied', 'tool_name': tool_name})}\n\n"
 
-        ollama_messages.append({
-            "role":    "user",
-            "content": (
-                f"The {tool_name} tool executed successfully. "
-                f"Your response MUST include the code in a fenced code block and the exact output. "
-                f"Here is what ran:\n\n"
-                f"```python\n{arguments.get('code', '')}\n```\n\n"
-                f"Exact output:\n```\n{tool_result}\n```\n\n"
-                f"Respond with: the code block above, the output, and one sentence confirming it worked."
-            ),
-        })
+        if approved:
+            code_snippet = arguments.get("code", "")
+            # Determine language for fenced block label
+            lang_label = "python" if tool_name == "execute_python" else (
+                "fortran" if tool_name == "execute_fortran" else "text"
+            )
+            ollama_messages.append({
+                "role":    "user",
+                "content": (
+                    f"Tool execution complete. Here is exactly what ran and what it returned.\n\n"
+                    f"**Code executed:**\n"
+                    f"```{lang_label}\n{code_snippet}\n```\n\n"
+                    f"**Output:**\n"
+                    f"```\n{tool_result}\n```\n\n"
+                    f"Summarise what the code did and confirm the result. "
+                    f"Keep the code and output fenced blocks exactly as shown above in your response."
+                ),
+            })
+        else:
+            ollama_messages.append({
+                "role":    "user",
+                "content": f"The user denied permission to run `{tool_name}`. Acknowledge this and ask how they would like to proceed.",
+            })
 
         # ── Re-enter ReAct loop ───────────────────────────────────────────────
         web_search_master_on = get_setting("web_search_enabled", "false").lower() == "true"

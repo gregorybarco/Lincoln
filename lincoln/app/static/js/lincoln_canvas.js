@@ -371,7 +371,7 @@ const lincolnCanvas = (() => {
   // ── Code block extraction ───────────────────────────────────────────────────
 
   function extractCodeBlocks(text) {
-    const blocks = [], regex = /```(\w*)\n([\s\S]*?)```/g;
+    const blocks = [], regex = /```(\w*)[ \t]*\r?\n([\s\S]*?)```/g;
     let match;
     while ((match = regex.exec(text)) !== null)
       blocks.push({ language: match[1] || 'text', content: match[2].trimEnd() });

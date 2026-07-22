@@ -383,7 +383,9 @@ const lincolnChat = (() => {
               bubbleEl.textContent = `Error: ${event.message}`;
               bubbleEl.style.color = 'var(--text-danger)';
             }
-          } catch (_) { /* malformed SSE line, skip */ }
+          } catch (err) {
+            console.error('[Lincoln] SSE event handling failed in sendMessage:', err, 'raw line:', line);
+          }
         }
       }
     } catch (err) {
@@ -615,22 +617,31 @@ const lincolnChat = (() => {
 
             if (event.type === 'done') {
               cursor.remove();
-              if (bubbleEl && fullText) {
-                _renderFinalMessage(bubbleEl, fullText, [], targetEl);
-                // Pin to canvas
-                if (typeof lincolnCanvas !== 'undefined') {
-                  const blocks = lincolnCanvas.extractCodeBlocks(fullText);
-                  blocks.forEach((block, i) => {
-                    const suffix   = blocks.length > 1 ? `_part${i + 1}` : '';
-                    const baseName = ('executed_code' + suffix + (lincolnChat._langExt?.[block.language] || '.py'));
-                    lincolnCanvas.pinCodeBlock({
-                      language:    block.language,
-                      filename:    lincolnCanvas.resolveFilename(baseName, sessionId),
-                      content:     block.content,
-                      projectName: '',
-                      sessionId:   sessionId,
+              if (bubbleEl) {
+                if (fullText) {
+                  // Render markdown for the LLM's post-execution response
+                  _renderFinalMessage(bubbleEl, fullText, [], targetEl);
+                  // Pin any code blocks in the response to canvas
+                  if (typeof lincolnCanvas !== 'undefined') {
+                    const blocks = lincolnCanvas.extractCodeBlocks(fullText);
+                    blocks.forEach((block, i) => {
+                      const suffix   = blocks.length > 1 ? `_part${i + 1}` : '';
+                      const ext      = _LANG_EXT[block.language] || '.py';
+                      const baseName = 'executed_code' + suffix + ext;
+                      lincolnCanvas.pinCodeBlock({
+                        language:    block.language,
+                        filename:    lincolnCanvas.resolveFilename(baseName, sessionId),
+                        content:     block.content,
+                        projectName: '',
+                        sessionId:   sessionId,
+                      });
                     });
-                  });
+                  }
+                } else {
+                  // Qwen streamed zero tokens — tool output shown by indicator above;
+                  // leave a minimal acknowledgement in the bubble.
+                  bubbleEl.innerHTML =
+                    '<span class="tool-executed-ack">✓ Executed — see tool output above.</span>';
                 }
               }
               cardEl?.classList.add('approval-card-dismissed');
@@ -645,7 +656,9 @@ const lincolnChat = (() => {
                 bubbleEl.style.color = 'var(--text-danger)';
               }
             }
-          } catch (_) {}
+          } catch (err) {
+            console.error('[Lincoln] SSE event handling failed in _resolveApproval:', err, 'raw line:', line);
+          }
         }
       }
     } catch (err) {
@@ -895,11 +908,32 @@ const lincolnChat = (() => {
   (function _initMarked() {
     if (typeof marked === 'undefined' || typeof hljs === 'undefined') return;
     const renderer = new marked.Renderer();
-    renderer.code  = function (code, lang) {
-      const language = (typeof lang === 'object' ? lang.lang : lang) || '';
-      const escaped  = language && hljs.getLanguage(language)
-        ? hljs.highlight(code, { language }).value
-        : hljs.highlightAuto(code).value;
+    renderer.code  = function (codeOrToken, maybeLang) {
+      // marked v5+ (we load v9.1.6) calls renderer.code(token) with a SINGLE
+      // object argument: { type, raw, lang, text, escaped }. Older marked
+      // versions called renderer.code(codeString, langString, escaped) with
+      // three positional args. Support both so a marked version bump never
+      // silently breaks rendering again.
+      let code, rawLang;
+      if (codeOrToken && typeof codeOrToken === 'object') {
+        code    = codeOrToken.text ?? '';
+        rawLang = codeOrToken.lang ?? '';
+      } else {
+        code    = codeOrToken ?? '';
+        rawLang = (typeof maybeLang === 'object' ? maybeLang?.lang : maybeLang) || '';
+      }
+      // Language token can carry extra info after a space (e.g. "python title=x") — take first word.
+      const language = (rawLang || '').trim().split(/\s+/)[0] || '';
+
+      let escaped;
+      try {
+        escaped = language && hljs.getLanguage(language)
+          ? hljs.highlight(code, { language }).value
+          : hljs.highlightAuto(code).value;
+      } catch (e) {
+        console.error('[Lincoln] hljs highlight failed, falling back to escaped text:', e);
+        escaped = _esc(code);
+      }
       const cls = language ? ` class="language-${language} hljs"` : ' class="hljs"';
       return `<pre><code${cls}>${escaped}</code></pre>`;
     };
@@ -907,8 +941,16 @@ const lincolnChat = (() => {
   })();
 
   function _md(text) {
-    if (typeof marked !== 'undefined') return marked.parse(text || '');
+    if (typeof marked !== 'undefined') {
+      try {
+        return marked.parse(text || '');
+      } catch (e) {
+        console.error('[Lincoln] marked.parse failed, falling back to plain renderer:', e);
+        // Fall through to the plain fallback below rather than losing the message.
+      }
+    }
     return _esc(text)
+      .replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _l, body) => `<pre><code>${body}</code></pre>`)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/\n/g, '<br>');
