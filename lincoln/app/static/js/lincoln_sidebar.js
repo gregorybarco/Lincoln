@@ -59,7 +59,12 @@ const lincolnSidebar = (() => {
 
   async function loadHistory() {
     try {
-      const res      = await fetch('/api/history');
+      // When a project is active, only fetch chats assigned to that project.
+      // This fixes the leak where general-history chats appeared inside projects.
+      const url = _activeProjectId
+        ? `/api/history?project_id=${_activeProjectId}`
+        : '/api/history';
+      const res      = await fetch(url);
       const sessions = await res.json();
       _renderHistory(sessions);
     } catch (err) {
@@ -72,20 +77,18 @@ const lincolnSidebar = (() => {
     if (!list) return;
 
     if (!sessions.length) {
-      list.innerHTML = '<div class="sidebar-empty-state">No history yet.</div>';
+      list.innerHTML = _activeProjectId
+        ? `<div class="sidebar-empty-state">No chats in this project yet.</div>`
+        : '<div class="sidebar-empty-state">No history yet.</div>';
       _renderHistoryToolbar(0, 0);
       return;
     }
-
-    const projectSessions = sessions.filter(s => s.project_id === _activeProjectId && _activeProjectId);
-    const generalSessions = sessions.filter(s => !s.project_id);
-    const otherSessions   = sessions.filter(s => s.project_id && s.project_id !== _activeProjectId);
 
     let html      = '';
     let allIds    = [];
     let itemIndex = 0;
 
-    function _sessionHTML(s, idx) {
+function _sessionHTML(s, idx) {
       allIds.push(s.id);
       const checked = _historySelected.has(s.id) ? 'checked' : '';
       return `
@@ -97,7 +100,7 @@ const lincolnSidebar = (() => {
           <label class="history-checkbox-wrap" onclick="event.stopPropagation()">
             <input type="checkbox" class="history-checkbox"
               ${checked}
-              onchange="lincolnSidebar._onHistoryCheckbox(event, ${s.id}, ${idx})">
+              onclick="lincolnSidebar._onHistoryCheckbox(event, ${s.id}, ${idx})">
           </label>
           <div class="history-content" onclick="lincolnSidebar._openHistorySession(${s.id})">
             <div class="history-title">${_esc(s.title)}</div>
@@ -117,30 +120,41 @@ const lincolnSidebar = (() => {
       </div>`;
     }
 
-    if (_showProjectChats && projectSessions.length && _activeProjectId) {
-      html += _groupLabel(_activeProject?.display_name || 'Project', projectSessions.length);
-      projectSessions.forEach(s => { html += _sessionHTML(s, itemIndex++); });
-    }
+    if (_activeProjectId) {
+      // Filtered mode — only this project's sessions are returned by the API.
+      // Render them all directly without any further grouping.
+      sessions.forEach(s => { html += _sessionHTML(s, itemIndex++); });
+    } else {
+      // No project active — general history view with optional project grouping.
+      const projectSessions = sessions.filter(s => s.project_id === _activeProjectId && _activeProjectId);
+      const generalSessions = sessions.filter(s => !s.project_id);
+      const otherSessions   = sessions.filter(s => s.project_id && s.project_id !== _activeProjectId);
 
-    if (generalSessions.length) {
-      if (html) html += _groupLabel('General', generalSessions.length);
-      generalSessions.forEach(s => { html += _sessionHTML(s, itemIndex++); });
-    }
+      if (_showProjectChats && projectSessions.length && _activeProjectId) {
+        html += _groupLabel(_activeProject?.display_name || 'Project', projectSessions.length);
+        projectSessions.forEach(s => { html += _sessionHTML(s, itemIndex++); });
+      }
 
-    if (_showProjectChats) {
-      const otherByProject = {};
-      otherSessions.forEach(s => {
-        const label = s.project_display_name || 'Other';
-        if (!otherByProject[label]) otherByProject[label] = [];
-        otherByProject[label].push(s);
-      });
-      Object.entries(otherByProject).forEach(([label, group]) => {
-        html += _groupLabel(label, group.length);
-        group.forEach(s => { html += _sessionHTML(s, itemIndex++); });
-      });
-    }
+      if (generalSessions.length) {
+        if (html) html += _groupLabel('General', generalSessions.length);
+        generalSessions.forEach(s => { html += _sessionHTML(s, itemIndex++); });
+      }
 
-    if (!html) html = '<div class="sidebar-empty-state">No general chats yet.</div>';
+      if (_showProjectChats) {
+        const otherByProject = {};
+        otherSessions.forEach(s => {
+          const label = s.project_display_name || 'Other';
+          if (!otherByProject[label]) otherByProject[label] = [];
+          otherByProject[label].push(s);
+        });
+        Object.entries(otherByProject).forEach(([label, group]) => {
+          html += _groupLabel(label, group.length);
+          group.forEach(s => { html += _sessionHTML(s, itemIndex++); });
+        });
+      }
+
+      if (!html) html = '<div class="sidebar-empty-state">No general chats yet.</div>';
+    }
 
     list.innerHTML = html;
     list.dataset.allIds = JSON.stringify(allIds);
@@ -183,23 +197,19 @@ const lincolnSidebar = (() => {
   // ── History item click / checkbox handlers ────────────────────────────────
 
   function _onHistoryItemClick(event, sessionId, itemIndex) {
-    // If clicking the checkbox or delete button, handled elsewhere
     if (event.target.closest('.history-checkbox-wrap') ||
         event.target.closest('.history-delete-btn')) return;
 
     if (event.shiftKey && _lastClickedIdx !== null) {
-      // Shift+click: select range
       _selectHistoryRange(_lastClickedIdx, itemIndex);
     } else if (!event.ctrlKey && !event.metaKey) {
-      // Plain click with no selection active: open session
       if (_historySelected.size === 0) {
+        _lastClickedIdx = itemIndex; // <-- ADD THIS so it remembers the click index
         _openHistorySession(sessionId);
         return;
       }
-      // If in selection mode, treat as toggle
       _toggleHistoryItem(sessionId);
     } else {
-      // Ctrl+click: toggle
       _toggleHistoryItem(sessionId);
     }
     _lastClickedIdx = itemIndex;
@@ -516,25 +526,44 @@ const lincolnSidebar = (() => {
   function _renderProjects(projects) {
     const list = document.getElementById('projectList');
     if (!list) return;
-    if (!projects.length) {
-      list.innerHTML = '<div class="sidebar-empty-state">No projects yet.</div>';
-      return;
-    }
-    list.innerHTML = projects.map(p => `
-      <div class="sidebar-project-item ${p.id === _activeProjectId ? 'active' : ''}"
-           id="projectItem_${p.id}"
-           onclick="lincolnSidebar.selectProject(${p.id})">
-        <div class="project-dot ${p.id === _activeProjectId ? 'active' : ''}"></div>
-        <div class="project-info">
-          <div class="project-name">${_esc(p.display_name)}</div>
-          <div class="project-meta">${p.vector_count?.toLocaleString() || 0} vectors</div>
+
+    let html = '';
+
+    // "No Project" deselect row — only shown when a project is active
+    if (_activeProjectId) {
+      html += `
+        <div class="sidebar-project-item no-project-item" id="exitProjectBtn"
+             onclick="lincolnSidebar.exitProject()" title="Exit project — return to general chat">
+          <div class="project-dot"></div>
+          <div class="project-info">
+            <div class="project-name" style="color:var(--text-muted)">No project</div>
+          </div>
+          <i class="ti ti-x" style="font-size:12px;color:var(--text-muted)"></i>
         </div>
-        <button class="project-settings-btn" title="Project settings"
-                onclick="event.stopPropagation(); lincolnSidebar.openProjectSettings(${p.id})">
-          <i class="ti ti-settings"></i>
-        </button>
-      </div>
-    `).join('');
+      `;
+    }
+
+    if (!projects.length) {
+      html += '<div class="sidebar-empty-state">No projects yet.</div>';
+    } else {
+      html += projects.map(p => `
+        <div class="sidebar-project-item ${p.id === _activeProjectId ? 'active' : ''}"
+             id="projectItem_${p.id}"
+             onclick="lincolnSidebar.selectProject(${p.id})">
+          <div class="project-dot ${p.id === _activeProjectId ? 'active' : ''}"></div>
+          <div class="project-info">
+            <div class="project-name">${_esc(p.display_name)}</div>
+            <div class="project-meta">${p.vector_count?.toLocaleString() || 0} vectors</div>
+          </div>
+          <button class="project-settings-btn" title="Project settings"
+                  onclick="event.stopPropagation(); lincolnSidebar.openProjectSettings(${p.id})">
+            <i class="ti ti-settings"></i>
+          </button>
+        </div>
+      `).join('');
+    }
+
+    list.innerHTML = html;
   }
 
   async function selectProject(projectId) {
@@ -547,12 +576,8 @@ const lincolnSidebar = (() => {
       _activeProjectId = projectId;
       _activeProject   = project;
 
-      document.querySelectorAll('.sidebar-project-item').forEach(el => {
-        el.classList.toggle('active', el.id === `projectItem_${projectId}`);
-      });
-      document.querySelectorAll('.project-dot').forEach((dot, i) => {
-        dot.classList.toggle('active', i === projects.findIndex(p => p.id === projectId));
-      });
+      // Re-render project list to show/update the "No Project" exit button
+      _renderProjects(projects);
 
       if (typeof lincolnChat !== 'undefined') {
         lincolnChat.setActiveProject(projectId, project);
@@ -562,6 +587,64 @@ const lincolnSidebar = (() => {
       await loadHistory();
     } catch (err) {
       console.error('Select project error:', err);
+    }
+  }
+
+  // ── Exit / deselect project ───────────────────────────────────────────────
+
+  async function exitProject() {
+    _activeProjectId = null;
+    _activeProject   = null;
+
+    // Deactivate all project items in sidebar
+    document.querySelectorAll('.sidebar-project-item').forEach(el => {
+      el.classList.remove('active');
+    });
+    document.querySelectorAll('.project-dot').forEach(dot => {
+      dot.classList.remove('active');
+    });
+    // Hide the exit button itself
+    document.getElementById('exitProjectBtn')?.style.setProperty('display', 'none');
+
+    if (typeof lincolnChat !== 'undefined') {
+      lincolnChat.clearActiveProject();
+      lincolnChat.newSession();
+    }
+
+    await loadHistory();
+  }
+
+  // ── Sidebar fold toggle ───────────────────────────────────────────────────
+
+  let _sidebarCollapsed = false;
+
+  function toggleSidebarFold() {
+    _sidebarCollapsed = !_sidebarCollapsed;
+    const sidebar = document.getElementById('lincolnSidebar');
+    const btn     = document.getElementById('sidebarFoldBtn');
+    const main    = document.getElementById('lincolnMain');
+
+    if (!sidebar) return;
+
+    if (_sidebarCollapsed) {
+      sidebar.style.width    = '36px';
+      sidebar.style.minWidth = '36px';
+      sidebar.style.overflow = 'hidden';
+      // Hide all children except the fold button itself
+      sidebar.querySelectorAll(':scope > *:not(#sidebarFoldBtnRow)').forEach(el => {
+        el.style.display = 'none';
+      });
+      if (btn) btn.textContent = '▶';
+      if (btn) btn.title = 'Expand sidebar';
+    } else {
+      sidebar.style.width    = '';
+      sidebar.style.minWidth = '';
+      sidebar.style.overflow = '';
+      sidebar.querySelectorAll(':scope > *').forEach(el => {
+        el.style.display = '';
+      });
+      if (btn) btn.textContent = '◀';
+      if (btn) btn.title = 'Collapse sidebar';
     }
   }
 
@@ -1112,6 +1195,7 @@ const lincolnSidebar = (() => {
     _deleteSelectedHistory,
     _deleteSelectedMemory,
     _selectAllHistory,
+    exitProject,
   };
 
 })();

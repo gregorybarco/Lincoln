@@ -58,6 +58,11 @@ const lincolnSettings = (() => {
       _loadStatus();
       if (!_fontsLoaded) { _loadFonts(); _fontsLoaded = true; }
       _loadToolPaths();
+
+      // NEW: Update sidebar version badge dynamically from DB
+      const versionBadge = document.getElementById('sidebarVersionDisplay');
+      if (versionBadge) versionBadge.textContent = 'v' + _v('lincoln_version', '0.7.0');
+
     } catch (err) {
       console.error('Settings load error:', err);
     }
@@ -644,10 +649,13 @@ const lincolnSettings = (() => {
         `<tr><td>${_esc(p.project)}</td><td>${p.vectors.toLocaleString()} vectors</td></tr>`
       ).join('');
 
+      // NEW: Force the UI to read from DB settings, ignoring the stale backend response
+      const fullVersionStr = `${_v('lincoln_version', '0.7.0')} -- ${_v('lincoln_codename', 'Navigator')}`;
+
       el.innerHTML = `
         <table class="status-table">
           <tbody>
-            <tr><td>Lincoln version</td><td>${_esc(data.version || '')}</td></tr>
+            <tr><td>Lincoln version</td><td>${_esc(fullVersionStr)}</td></tr>
             <tr><td>Ollama</td><td>${ollamaOk ? ok : bad} ${_esc(data.ollama?.message || '')}</td></tr>
             <tr><td>Database</td><td>${dbOk ? ok : bad} ${_esc(data.database?.path || '')} (${data.database?.size_kb} KB)</td></tr>
             <tr><td>Tesseract OCR</td><td>${tessOk ? ok : bad} ${tessOk ? 'Available' : _esc(data.tesseract?.note || 'Not installed')}</td></tr>

@@ -2,7 +2,7 @@
 setlocal
 
 REM ============================================================
-REM  Lincoln v0.6.0 -- Navigator
+REM  Lincoln v0.7.0 -- Navigator
 REM  One-click launcher: activates venv, starts Flask, opens browser
 REM  Place in: B:\Homebrewed_AI\Lincoln\
 REM  To pin to taskbar: create a shortcut to this .bat with lincoln.ico

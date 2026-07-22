@@ -48,6 +48,14 @@
       color: var(--text-accent);
       background: color-mix(in srgb, var(--text-accent) 8%, transparent);
     }
+    /* Fix for Settings Panel flex overflow */
+    .settings-body {
+      overflow: hidden !important; 
+    }
+    .settings-pane-container {
+      overflow-y: auto;
+      height: 100%;
+    }
   </style>
 </head>
 <body>
@@ -59,6 +67,12 @@
   <aside class="lincoln-sidebar" id="lincolnSidebar">
 
     <div class="sidebar-logo">
+        <div style="display:flex;align-items:center;gap:6px">
+        <button class="sidebar-section-action" onclick="lincolnHelp.open()" title="Help — what can Lincoln do?">
+          <i class="ti ti-help" aria-hidden="true"></i>
+        </button>
+        <span class="sidebar-version" id="sidebarVersionDisplay">v0.7.0</span>
+      </div>
       <div class="sidebar-logo-left">
         <span class="sidebar-status-dot" id="ollamaStatusDot"></span>
         <span class="sidebar-logo-name">Lincoln</span>
@@ -69,6 +83,13 @@
         </button>
         <span class="sidebar-version">v0.7.0</span>
       </div>
+      <div style="display:flex;align-items:center;gap:6px">
+          <button class="sidebar-section-action" onclick="lincolnHelp.open()" title="Help — what can Lincoln do?">
+              <i class="ti ti-help" aria-hidden="true"></i>
+          </button>
+          <span class="sidebar-version" id="sidebarVersionDisplay">v0.7.0</span>
+      </div>
+
     </div>
 
     <nav class="sidebar-nav">
@@ -136,6 +157,9 @@
         </span>
       </div>
       <div class="topbar-right">
+        <button class="topbar-icon-btn" onclick="lincolnChat.saveAgenticMemory()" title="Save session context to Memory">
+          <i class="ti ti-brain" aria-hidden="true"></i>
+        </button>
         <button class="topbar-icon-btn" onclick="lincolnHelp.open()" title="Help">
           <i class="ti ti-help" aria-hidden="true"></i>
         </button>

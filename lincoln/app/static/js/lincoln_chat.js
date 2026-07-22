@@ -103,6 +103,19 @@ const lincolnChat = (() => {
     await _loadContextStrip();
     _updateThinkButton();
     _setupGlobalEscape();
+
+    // NEW: LocalStorage Draft Cache
+    const input = document.getElementById('chatInput');
+    if (input) {
+      const savedDraft = localStorage.getItem('lincoln_draft');
+      if (savedDraft) {
+        input.value = savedDraft;
+        autoResizeTextarea(input);
+      }
+      input.addEventListener('input', (e) => {
+        localStorage.setItem('lincoln_draft', e.target.value);
+      });
+    }
   }
 
   // ── Session management ────────────────────────────────────────────────────
@@ -212,6 +225,7 @@ const lincolnChat = (() => {
     _resetWebSearchPill();
 
     input.value = '';
+    localStorage.removeItem('lincoln_draft');
     autoResizeTextarea(input);
     _hideWelcome();
 
@@ -1262,6 +1276,52 @@ const lincolnChat = (() => {
     }
   });
 
+  // ── Agentic Memory Context Save ───────────────────────────────────────────
+  
+  async function saveAgenticMemory() {
+    const bubbles = document.querySelectorAll('.lincoln-message');
+    if (!bubbles.length) {
+      _showToast('No chat history to save.', 'error');
+      return;
+    }
+
+    // Scrape the DOM for the current chat context
+    let contextString = '';
+    bubbles.forEach(msg => {
+      const isUser = msg.classList.contains('user-message');
+      const text = msg.querySelector('.message-bubble')?.innerText || '';
+      contextString += (isUser ? 'User: ' : 'Lincoln: ') + text + '\n\n';
+    });
+
+    const payload = {
+      project_id: _activeProjectId || null,
+      date: new Date().toISOString(),
+      context: contextString,
+      instruction: "Extract core facts, project decisions, and architectural rules from this context and save them to long-term memory."
+    };
+
+    _showToast('Analyzing session and saving to memory...', 'info');
+
+    try {
+      const response = await fetch('/api/history/memory/auto', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        _showToast("Session successfully extracted and saved to memory!", 'success');
+        if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadMemory?.();
+      } else {
+        const data = await response.json();
+        _showToast(data.error || "Failed to save memory.", 'error');
+      }
+    } catch (error) {
+      console.error("Memory save error:", error);
+      _showToast("Error saving to memory.", 'error');
+    }
+  }
+
   return {
     init,
     newSession,
@@ -1291,6 +1351,7 @@ const lincolnChat = (() => {
     _showApprovalCard,
     _showToolExecutingIndicator,
     _updateToolExecutingIndicator,
+    saveAgenticMemory
   };
 
 })();
