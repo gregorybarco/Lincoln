@@ -151,6 +151,9 @@ _DEFAULT_SETTINGS = {
     "lincoln_codename":             "Navigator",
     # Web search behaviour
     "web_search_always_on":         "false",
+    #Version control
+    "app_version": "0.7.2",
+    "app_codename": "Navigator",
 }
 
 
