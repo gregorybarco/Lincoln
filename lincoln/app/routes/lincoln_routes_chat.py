@@ -641,16 +641,8 @@ def resolve_tool():
         # (the last assistant message in history is the text before the tool call,
         #  or empty if the model went straight to a tool call)
         ollama_messages.append({
-            "role":       "assistant",
-            "content":    "",
-            "tool_calls": [{
-                "id":       tool_call_id,
-                "type":     "function",
-                "function": {
-                    "name":      tool_name,
-                    "arguments": json.dumps(arguments),
-                },
-            }],
+            "role":    "assistant",
+            "content": f"I used the {tool_name} tool with these arguments: {json.dumps(arguments)}",
         })
 
         # ── Execute or deny ───────────────────────────────────────────────────
@@ -658,13 +650,21 @@ def resolve_tool():
             yield f"data: {json.dumps({'type': 'tool_executing', 'tool_name': tool_name, 'arguments': arguments})}\n\n"
             tool_result = _execute_tool(tool_name, arguments, project)
             yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': tool_name, 'result_preview': tool_result[:200]})}\n\n"
+            yield f"data: {json.dumps({'type': 'tool_output', 'tool_name': tool_name, 'output': tool_result})}\n\n"
         else:
             tool_result = f"User denied permission to execute '{tool_name}'."
             yield f"data: {json.dumps({'type': 'tool_denied', 'tool_name': tool_name})}\n\n"
 
         ollama_messages.append({
-            "role":         "tool",
-            "content":      tool_result,
+            "role":    "user",
+            "content": (
+                f"The {tool_name} tool executed successfully. "
+                f"Your response MUST include the code in a fenced code block and the exact output. "
+                f"Here is what ran:\n\n"
+                f"```python\n{arguments.get('code', '')}\n```\n\n"
+                f"Exact output:\n```\n{tool_result}\n```\n\n"
+                f"Respond with: the code block above, the output, and one sentence confirming it worked."
+            ),
         })
 
         # ── Re-enter ReAct loop ───────────────────────────────────────────────

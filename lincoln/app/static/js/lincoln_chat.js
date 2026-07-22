@@ -604,6 +604,10 @@ const lincolnChat = (() => {
             if (event.type === 'tool_denied') {
               _showToast(`Tool denied: ${event.tool_name}`, 'info');
             }
+            if (event.type === 'tool_output') {
+              console.log(`[Lincoln] ${event.tool_name} output:`, event.output);
+              _showToast(`Output: ${event.output.slice(0, 80)}`, 'info');
+            }
 
             if (event.type === 'approval_required') {
               // Nested approval — another gated tool in the same ReAct chain
