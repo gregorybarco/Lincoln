@@ -52,6 +52,7 @@ from lincoln.lincoln_database import (
     get_active_system_prompt,
     get_setting,
     save_pending_tool_call,
+    save_memory_entry,
 )
 from lincoln.lincoln_ollama_service import (
     build_messages_with_rag_context,
@@ -270,6 +271,38 @@ def _execute_tool(tool_name: str, arguments: dict, project: dict | None) -> str:
             f"Aider will propose diffs — review and approve all changes manually."
         )
 
+    # -- save_memory -----------------------------------------------------------
+    elif tool_name == "save_memory":
+        fact = arguments.get("fact", "").strip()
+        tag  = arguments.get("tag", "fact")
+        if not fact:
+            return "Memory save failed: no fact provided."
+        try:
+            save_memory_entry(
+                content    = fact,
+                project_id = project["id"] if project else None,
+                tag        = tag,
+            )
+            print(f"[Lincoln] save_memory: tag={tag} fact={fact[:80]}")
+            return f"Saved to memory: '{fact}'"
+        except Exception as e:
+            return f"Memory save failed: {e}"
+
+    # -- read_url --------------------------------------------------------------
+    elif tool_name == "read_url":
+        from lincoln.lincoln_web_search import fetch
+        url = arguments.get("url", "").strip()
+        if not url.startswith("http"):
+            return "Invalid URL: must start with http:// or https://"
+        try:
+            content = fetch(url)
+            # Cap at 8000 chars to avoid blowing the context window on a single page
+            if len(content) > 8000:
+                return content[:8000] + "\n\n[Content truncated at 8000 characters]"
+            return content if content else "(Page fetched but no readable text extracted)"
+        except Exception as e:
+            return f"Failed to fetch URL '{url}': {e}"
+
     else:
         return f"Unknown tool: {tool_name}"
 
@@ -364,11 +397,12 @@ def _react_loop(
                 "type":     "function",
                 "function": {
                     "name":      tool_name,
-                    "arguments": json.dumps(arguments),
+                    "arguments": arguments,   # native dict -- never json.dumps()
                 },
             }],
         }
         ollama_messages.append(assistant_tool_request)
+        print(f"[Lincoln] _react_loop: appended tool_call tool={tool_name} id={tool_call_id} args={str(arguments)[:80]}")
 
         # ── SAFE_TOOLS: execute immediately ───────────────────────────────────
         if tier == "safe":
@@ -377,6 +411,7 @@ def _react_loop(
             ollama_messages.append({
                 "role":         "tool",
                 "content":      tool_result,
+                "tool_call_id": tool_call_id,
             })
             yield f"data: {json.dumps({'type': 'tool_result', 'tool_name': tool_name, 'result_preview': tool_result[:200]})}\n\n"
             # Loop continues — LLM reads the result and either answers or calls another tool
@@ -391,6 +426,7 @@ def _react_loop(
                 ollama_messages.append({
                     "role":         "tool",
                     "content":      tool_result,
+                    "tool_call_id": tool_call_id,
                 })
                 yield f"data: {json.dumps({'type': 'web_search', 'result_count': tool_result.count('[')})}\n\n"
                 # Loop continues
@@ -413,6 +449,7 @@ def _react_loop(
             ollama_messages.append({
                 "role":         "tool",
                 "content":      f"Unknown tool '{tool_name}'. This tool is not registered.",
+                "tool_call_id": tool_call_id,
             })
 
     # Max iterations reached

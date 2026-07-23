@@ -198,64 +198,101 @@ def remove_all_memory():
 @history_blueprint.route("/api/history/memory/auto", methods=["POST"])
 def auto_save_memory():
     """
-    Spawns a background thread to handle Ollama memory extraction asynchronously,
-    returning an immediate 200 OK to the UI to prevent hanging.
+    Spawns a background thread to extract and save session memory asynchronously.
+    Returns 200 OK immediately so the UI never hangs.
+
+    v0.7.1 fixes:
+      - Was writing to phantom 'memory_entries' table via raw SQL.
+        Now uses save_memory_entry() which writes to the correct
+        'lincoln_memory_entries' table.
+      - History payload is now cleaned into a readable 'User: / Lincoln:'
+        transcript before being passed to the LLM -- not str(list) repr.
+      - Extraction prompt is more specific and produces higher-quality output.
+      - History capped at last 3000 chars to prevent VRAM spike.
     """
     import threading
-    from lincoln.lincoln_configuration import DB_PATH, LLM_MODEL
+    from lincoln.lincoln_configuration import LLM_MODEL
 
-    data = request.get_json(silent=True) or {}
-    chat_history = data.get("history") or data.get("context") or []
+    data           = request.get_json(silent=True) or {}
     raw_project_id = data.get("project_id")
-    project_id = int(raw_project_id) if raw_project_id is not None and str(raw_project_id).isdigit() else None
+    project_id     = (
+        int(raw_project_id)
+        if raw_project_id is not None and str(raw_project_id).isdigit()
+        else None
+    )
 
-    def _background_extract(history_data, proj_id):
+    # JS sends context as a pre-formatted "User: ...\nLincoln: ..." string
+    # (built by saveAgenticMemory() in lincoln_chat.js DOM scrape).
+    # Fall back to history list if context key is missing.
+    raw_context = data.get("context") or data.get("history") or ""
+
+    # If it arrived as a list (old format), convert to readable transcript
+    if isinstance(raw_context, list):
+        lines = []
+        for msg in raw_context:
+            role    = msg.get("role", "unknown")
+            content = msg.get("content", "").strip()
+            if role == "user":
+                lines.append(f"User: {content}")
+            elif role == "assistant":
+                lines.append(f"Lincoln: {content}")
+        raw_context = "\n\n".join(lines)
+
+    # Cap to last 3000 chars to avoid VRAM spike on long sessions
+    transcript = str(raw_context).strip()
+    if len(transcript) > 3000:
+        transcript = transcript[-3000:]
+
+    if not transcript:
+        return jsonify({"status": "ok", "message": "No history to extract from."}), 200
+
+    def _background_extract(transcript_text: str, proj_id: int | None):
         try:
-            import sqlite3
             import ollama
+            from lincoln.lincoln_database import save_memory_entry
 
             extraction_prompt = (
-                "Analyze the following chat history and extract key architectural facts, "
-                "user preferences, and code patterns into a concise bulleted list. "
-                "Output only the extracted facts.\n\n" + str(history_data)
+                "You are a memory extraction assistant. "
+                "Read the following chat transcript and extract ONLY facts worth "
+                "remembering across future sessions. Focus on:\n"
+                "- User preferences and style rules (e.g. 'User prefers X')\n"
+                "- Decisions made (e.g. 'Decided to use Y for Z')\n"
+                "- Constraints or bans (e.g. 'Never use ctypes for GPU bridging')\n"
+                "- Tool paths, versions, or environment facts\n"
+                "- Code style directives\n\n"
+                "Output a concise bulleted list of declarative sentences. "
+                "Each bullet must make sense in isolation. "
+                "Do NOT include temporary working notes, questions, or mid-task state. "
+                "If there is nothing worth saving, output exactly: NOTHING_TO_SAVE\n\n"
+                f"Transcript:\n{transcript_text}"
             )
 
             response = ollama.chat(
-                model=LLM_MODEL,
-                messages=[{"role": "user", "content": extraction_prompt}]
+                model    = LLM_MODEL,
+                messages = [{"role": "user", "content": extraction_prompt}],
             )
-            extracted_facts = response.get("message", {}).get("content", "").strip()
+            extracted = response.get("message", {}).get("content", "").strip()
 
-            if not extracted_facts:
-                extracted_facts = "No facts extracted from session history."
+            if not extracted or extracted == "NOTHING_TO_SAVE":
+                print("[Lincoln] auto_save_memory: nothing worth saving in this session.")
+                return
 
-            # Use direct thread-safe connection to persist memory
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS memory_entries (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    content TEXT NOT NULL,
-                    project_id INTEGER,
-                    tag TEXT DEFAULT 'session_summary',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cursor.execute(
-                "INSERT INTO memory_entries (content, project_id, tag) VALUES (?, ?, ?)",
-                (extracted_facts, proj_id, "session_summary")
+            # Write to correct table via DB helper (not raw SQL)
+            save_memory_entry(
+                content    = extracted,
+                project_id = proj_id,
+                tag        = "session_summary",
             )
-            conn.commit()
-            conn.close()
+            print(f"[Lincoln] auto_save_memory: saved {len(extracted)} chars to memory.")
+
         except Exception as bg_err:
-            print(f"[Lincoln Background Memory Error]: {bg_err}")
+            print(f"[Lincoln] auto_save_memory background error: {bg_err}")
 
-    # Spawn thread so UI returns instantly
-    t = threading.Thread(target=_background_extract, args=(chat_history, project_id))
+    t        = threading.Thread(target=_background_extract, args=(transcript, project_id))
     t.daemon = True
     t.start()
 
     return jsonify({
-        "status": "ok",
-        "message": "Memory extraction queued in background."
+        "status":  "ok",
+        "message": "Memory extraction queued in background.",
     }), 200
