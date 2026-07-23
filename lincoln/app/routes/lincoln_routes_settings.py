@@ -79,6 +79,8 @@ _EDITABLE_KEYS = {
     "upload_retention_days",
     "ollama_timeout_sec",
     "web_search_enabled",
+    "web_search_always_on",
+    "web_search_primary",
     "nvfortran_path",
     "f2py_fcompiler_flag",
     "wsl_distro",

@@ -217,26 +217,66 @@ def search(
         query = cleaned
 
     # Try DDG first
-    ddg_error = None
+    # Read primary engine preference from DB
     try:
-        results = _search_ddg(query, max_results)
-        if results:
-            print(f"[Lincoln] web_search DDG OK — query='{query}' results={len(results)}")
-            return results
-    except Exception as e:
-        ddg_error = str(e)
-        print(f"[Lincoln] web_search DDG failed ({ddg_error}), trying Google fallback")
+        from lincoln.lincoln_database import get_setting
+        primary = get_setting("web_search_primary", "ddg_with_fallback")
+    except Exception:
+        primary = "ddg_with_fallback"
 
-    # Google fallback
-    try:
-        results = _search_google(query, max_results)
-        print(f"[Lincoln] web_search Google fallback OK — query='{query}' results={len(results)}")
-        return results
-    except Exception as google_error:
-        raise RuntimeError(
-            f"Both search engines failed. "
-            f"DDG: {ddg_error} | Google: {google_error}"
-        )
+    import time
+
+    if primary == "google":
+        # Google only — no DDG
+        try:
+            results = _search_google(query, max_results)
+            print(f"[Lincoln] web_search Google (primary) OK — query='{query}' results={len(results)}")
+            return results
+        except Exception as e:
+            raise RuntimeError(f"Google search failed: {e}")
+
+    elif primary == "ddg":
+        # DDG only — no fallback
+        ddg_error = None
+        for attempt in range(3):
+            try:
+                results = _search_ddg(query, max_results)
+                if results:
+                    print(f"[Lincoln] web_search DDG OK — query='{query}' results={len(results)}")
+                    return results
+                print(f"[Lincoln] web_search DDG attempt {attempt+1} returned 0 results, retrying...")
+            except Exception as e:
+                ddg_error = str(e)
+                print(f"[Lincoln] web_search DDG attempt {attempt+1} failed: {ddg_error}, retrying...")
+            if attempt < 2:
+                time.sleep(1)
+        raise RuntimeError(f"DDG failed after 3 attempts: {ddg_error}")
+
+    else:
+        # ddg_with_fallback (default) — DDG first, Google fallback
+        ddg_error = None
+        for attempt in range(3):
+            try:
+                results = _search_ddg(query, max_results)
+                if results:
+                    print(f"[Lincoln] web_search DDG OK — query='{query}' results={len(results)}")
+                    return results
+                print(f"[Lincoln] web_search DDG attempt {attempt+1} returned 0 results, retrying...")
+            except Exception as e:
+                ddg_error = str(e)
+                print(f"[Lincoln] web_search DDG attempt {attempt+1} failed: {ddg_error}, retrying...")
+            if attempt < 2:
+                time.sleep(1)
+        print(f"[Lincoln] web_search DDG failed after 3 attempts, trying Google fallback")
+        try:
+            results = _search_google(query, max_results)
+            print(f"[Lincoln] web_search Google fallback OK — query='{query}' results={len(results)}")
+            return results
+        except Exception as google_error:
+            raise RuntimeError(
+                f"Both search engines failed. "
+                f"DDG: {ddg_error} | Google: {google_error}"
+            )
 
 
 # ── URL fetch ─────────────────────────────────────────────────────────────────

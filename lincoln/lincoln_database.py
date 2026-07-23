@@ -138,7 +138,6 @@ _DEFAULT_SETTINGS = {
     # Ollama / LLM
     "ollama_timeout_sec":           "180",
     "web_search_enabled":           "false",
-    "web_search_always_on":         "false",
     # Build tools (your machine -- editable from UI)
     "nvfortran_path":               "/opt/nvidia/hpc_sdk/Linux_x86_64/26.3/compilers/bin/nvfortran",
     "f2py_fcompiler_flag":          "nv",
@@ -152,6 +151,7 @@ _DEFAULT_SETTINGS = {
     "lincoln_codename":             "Navigator",
     # Web search behaviour
     "web_search_always_on":         "false",
+    "web_search_primary":           "ddg_with_fallback",
     #Version control
     "app_version": "0.7.2",
     "app_codename": "Navigator",

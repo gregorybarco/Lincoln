@@ -346,6 +346,13 @@ const lincolnSettings = (() => {
         configured as fallback in the Infrastructure tab.
       </p>
       <div class="settings-field settings-field-row">
+        <label class="settings-label">Primary search engine</label>
+        <select class="settings-select" data-key="web_search_primary">
+          <option value="ddg_with_fallback" ${_v('web_search_primary') === 'ddg_with_fallback' ? 'selected' : ''}>DDG with Google fallback (recommended)</option>
+          <option value="ddg" ${_v('web_search_primary') === 'ddg' ? 'selected' : ''}>DuckDuckGo only (privacy)</option>
+          <option value="google" ${_v('web_search_primary') === 'google' ? 'selected' : ''}>Google only (best results)</option>
+        </select>
+        <p class="settings-hint">DDG uses Bing's index. Google has a fresher, larger index — better for financial data and breaking news. Requires GOOGLE_API_KEY and GOOGLE_CSE_ID in .env.</p>
         <label class="settings-label">Always-on search mode</label>
         <input type="checkbox" class="settings-checkbox" data-key="web_search_always_on"
           ${_v('web_search_always_on') === 'true' ? 'checked' : ''}>

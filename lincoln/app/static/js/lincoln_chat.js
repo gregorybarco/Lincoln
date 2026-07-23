@@ -69,6 +69,7 @@ const lincolnChat = (() => {
   // ── Web search toggle (per-message globe pill) ────────────────────────────
 
   function toggleWebSearch() {
+    if (_webSearchAlwaysOn) return;
     _webSearchActive = !_webSearchActive;
     const btn = document.getElementById('webSearchPill');
     if (btn) {
@@ -91,11 +92,17 @@ const lincolnChat = (() => {
   }
 
   // Called on init and by settings when the always-on toggle changes
-  async function syncAlwaysOnSearch() {
+  async function syncAlwaysOnSearch(forcedValue) {
     try {
-      const res  = await fetch('/api/settings');
-      const data = await res.json();
-      _webSearchAlwaysOn = (data.web_search_always_on === 'true');
+      let alwaysOn;
+      if (forcedValue !== undefined) {
+        alwaysOn = forcedValue === true || forcedValue === 'true';
+      } else {
+        const res  = await fetch('/api/settings');
+        const data = await res.json();
+        alwaysOn = ((data.ui_settings?.web_search_always_on ?? data.web_search_always_on) === 'true');
+      }
+      _webSearchAlwaysOn = alwaysOn;
       if (_webSearchAlwaysOn) {
         _webSearchActive = true;
         const btn = document.getElementById('webSearchPill');
