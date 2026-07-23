@@ -2284,3 +2284,74 @@ body { font-family: var(--ui-font); }
         .infra-action-btn.infra-action-danger:hover {
             background: color-mix(in srgb, var(--text-danger) 8%, transparent);
         }
+
+/* ── Context window indicator (P3) ─────────────────────────────────────── */
+.ctx-indicator {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-left: 12px;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm, 4px);
+    background: var(--bg-surface);
+    border: 0.5px solid var(--border);
+    min-width: 140px;
+}
+
+.ctx-indicator-labels {
+    display: flex;
+    align-items: baseline;
+    gap: 3px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono, monospace);
+    white-space: nowrap;
+}
+
+.ctx-sep {
+    color: var(--text-muted);
+}
+
+.ctx-unit {
+    color: var(--text-muted);
+    font-size: 10px;
+    margin-left: 1px;
+}
+
+.ctx-percent {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+    .ctx-percent.ctx-warn {
+        color: var(--text-warning, #f59e0b);
+    }
+
+    .ctx-percent.ctx-danger {
+        color: var(--text-danger, #ef4444);
+    }
+
+.ctx-bar-track {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.ctx-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--accent-fill, #6366f1);
+    border-radius: 2px;
+    transition: width 0.4s ease, background 0.3s ease;
+}
+
+    .ctx-bar.ctx-bar-warn {
+        background: var(--text-warning, #f59e0b);
+    }
+
+    .ctx-bar.ctx-bar-danger {
+        background: var(--text-danger, #ef4444);
+    }

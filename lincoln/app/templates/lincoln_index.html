@@ -142,13 +142,26 @@
 
     <!-- TOPBAR -->
     <header class="lincoln-topbar" id="lincolnTopbar">
-      <div class="topbar-left">
-        <span class="topbar-project-badge" id="topbarProjectBadge">No project</span>
-        <span class="topbar-mode-badge">
-          <i class="ti ti-lock" aria-hidden="true"></i>
-          Suggestion mode
-        </span>
-      </div>
+        <div class="topbar-left">
+            <span class="topbar-project-badge" id="topbarProjectBadge">No project</span>
+            <span class="topbar-mode-badge">
+                <i class="ti ti-lock" aria-hidden="true"></i>
+                Suggestion mode
+            </span>
+            <!-- Context window usage indicator (P3) -->
+            <div id="ctxIndicator" class="ctx-indicator" style="display:none" title="Context window usage">
+                <div class="ctx-indicator-labels">
+                    <span id="ctxTokensUsed">0</span>
+                    <span class="ctx-sep">/</span>
+                    <span id="ctxCeiling">--</span>
+                    <span class="ctx-unit">tok</span>
+                    <span id="ctxPercent" class="ctx-percent">0%</span>
+                </div>
+                <div class="ctx-bar-track">
+                    <div id="ctxBar" class="ctx-bar"></div>
+                </div>
+            </div>
+        </div>
       <div class="topbar-right">
         <button class="topbar-icon-btn" onclick="lincolnChat.saveAgenticMemory()" title="Save session context to Memory">
           <i class="ti ti-brain" aria-hidden="true"></i>

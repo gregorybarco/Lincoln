@@ -790,3 +790,58 @@ def resolve_tool():
             "Connection":        "keep-alive",
         },
     )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# P3 — Context window usage endpoint
+# APPEND this to the bottom of lincoln_routes_chat.py.
+# RESTART REQUIRED after saving.
+#
+# Notes:
+#   - LLM_MODEL is already imported at the top of this file from
+#     lincoln.lincoln_configuration — do NOT import it again.
+#   - get_session_messages is already imported from lincoln.lincoln_database.
+#   - resolve_hardware_ceiling is in lincoln_ollama_service.
+# ══════════════════════════════════════════════════════════════════════════════
+
+@chat_blueprint.route("/api/chat/context_usage", methods=["GET"])
+def context_usage():
+    """
+    Token usage estimate for the current session vs the model's hardware ceiling.
+
+    Query params:
+      session_id  int   required
+      model       str   optional; defaults to LLM_MODEL from configuration
+
+    Returns JSON:
+      tokens_used   int     estimated tokens consumed by session so far
+      ceiling       int     hardware-derived context window ceiling for this model
+      percent       float   usage percentage (0-100)
+      model         str     model name used for ceiling lookup
+      warning       bool    true when percent >= 80
+    """
+    from lincoln.lincoln_ollama_service import resolve_hardware_ceiling
+
+    session_id = request.args.get("session_id", type=int)
+    model      = (request.args.get("model") or "").strip() or LLM_MODEL
+
+    if not session_id:
+        return jsonify({"error": "session_id is required"}), 400
+
+    try:
+        messages    = get_session_messages(session_id)
+        # Estimate: chars / 4 tokens per char, +10% for role/formatting overhead
+        total_chars = sum(len(m.get("content", "")) for m in messages)
+        tokens_used = int((total_chars / 4) * 1.10)
+        ceiling     = resolve_hardware_ceiling(model)
+        percent     = round((tokens_used / ceiling) * 100, 1) if ceiling > 0 else 0.0
+
+        return jsonify({
+            "tokens_used": tokens_used,
+            "ceiling":     ceiling,
+            "percent":     percent,
+            "model":       model,
+            "warning":     percent >= 80.0,
+        })
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500

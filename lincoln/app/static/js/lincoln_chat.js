@@ -157,6 +157,7 @@ const lincolnChat = (() => {
     _clearMessages();
     _clearPendingFile();
     if (typeof lincolnCanvas !== 'undefined') lincolnCanvas.clear();
+    _hideCtxIndicator();
     const badge = document.getElementById('topbarProjectBadge');
     if (badge) badge.textContent = 'No project';
     if (typeof lincolnSidebar !== 'undefined') {
@@ -363,6 +364,7 @@ const lincolnChat = (() => {
               cursor.remove();
               _renderFinalMessage(bubbleEl, fullText, sources, assistantEl);
               _scrollToBottom();
+              _updateCtxIndicator();
 
               if (typeof lincolnCanvas !== 'undefined') {
                 const blocks = lincolnCanvas.extractCodeBlocks(fullText);
@@ -1093,6 +1095,46 @@ const lincolnChat = (() => {
     if (pill && dd && !pill.contains(e.target) && !dd.contains(e.target)) closeThinkDropdown();
   });
 
+  async function _updateCtxIndicator() {
+    if (!_sessionId) return;
+    const model = (typeof lincolnSettings !== 'undefined' && lincolnSettings.activeModel)
+                  ? lincolnSettings.activeModel
+                  : '';
+    try {
+      const params = new URLSearchParams({ session_id: _sessionId });
+      if (model) params.set('model', model);
+      const res  = await fetch('/api/chat/context_usage?' + params.toString());
+      if (!res.ok) return;
+      const data = await res.json();
+ 
+      const indicator = document.getElementById('ctxIndicator');
+      const tokUsed   = document.getElementById('ctxTokensUsed');
+      const ceiling   = document.getElementById('ctxCeiling');
+      const pct       = document.getElementById('ctxPercent');
+      const bar       = document.getElementById('ctxBar');
+      if (!indicator) return;
+ 
+      if (tokUsed) tokUsed.textContent = data.tokens_used.toLocaleString();
+      if (ceiling) ceiling.textContent = data.ceiling.toLocaleString();
+ 
+      const p = data.percent;
+      if (pct) {
+        pct.textContent = p.toFixed(1) + '%';
+        pct.className   = 'ctx-percent' + (p >= 90 ? ' ctx-danger' : p >= 75 ? ' ctx-warn' : '');
+      }
+      if (bar) {
+        bar.style.width = Math.min(p, 100) + '%';
+        bar.className   = 'ctx-bar' + (p >= 90 ? ' ctx-bar-danger' : p >= 75 ? ' ctx-bar-warn' : '');
+      }
+      indicator.style.display = 'flex';
+    } catch (_) { /* silently ignore — indicator is non-critical */ }
+  }
+ 
+  function _hideCtxIndicator() {
+    const el = document.getElementById('ctxIndicator');
+    if (el) el.style.display = 'none';
+  }
+
   return {
     init,
     newSession,
@@ -1120,6 +1162,7 @@ const lincolnChat = (() => {
     showToast: _showToast,
     _approveToolCall,
     _denyToolCall,
+    showCtxIndicator: _updateCtxIndicator,
   };
 
 })();
