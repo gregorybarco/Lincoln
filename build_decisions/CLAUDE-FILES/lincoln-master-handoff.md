@@ -225,3 +225,5 @@ If Claude skips this, prompt: **"Check recent chats and memory first."**
 | 2026-07-23 | Settings patch went to wrong file | Stale duplicate at `lincoln/lincoln_routes_settings.py` | Stale copy deleted; correct path is `lincoln/app/routes/lincoln_routes_settings.py` |
 | 2026-07-22 | KaTeX mangles financial text | Bare `$` treated as math delimiter | Removed bare `$` from KaTeX config |
 | 2026-07-22 | Date in web search queries stale | Qwen doesn't know current date | `date.today().isoformat()` injected in system prompt |
+| 2026-07-23 | Duplicate v0.7.0 badge shown 3x in topbar | 3 copies of the same help-button+version-span div in sidebar-logo, 2 sharing id="sidebarVersionDisplay" | Removed 2 duplicate divs, kept the one with the id |
+| 2026-07-23 | Dead comment clutter in lincoln_routes_chat.py | Leftover duplicate header + stale "APPEND/RESTART" patch-instruction banner from earlier edits | Both removed; confirmed non-load-bearing |

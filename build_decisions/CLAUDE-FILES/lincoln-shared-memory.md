@@ -41,6 +41,8 @@ Everything below is confirmed built, deployed locally to `B:\Homebrewed_AI\Linco
 | System prompt 4 active blocks | ✅ Live | `lincoln_database.py` (seeded) | Lincoln persona, Life cycle, Memory Save Behavior, Tool Chaining Mandate |
 | Four active DB system prompt blocks | ✅ Live | `lincoln_database.py` | Scope=global, persistent, survives restarts |
 | Ban list checker | ✅ Live | `lincoln_ban_list_checker.py`, `lincoln_routes_chat.py` | Fires warning banner on OptionsPricing generated code |
+| Version badge single-instance fix | ✅ Live | lincoln_index.html | Removed 2 duplicate sidebar-logo divs; one span with id="sidebarVersionDisplay" remains |
+| Routes comment hygiene cleanup | ✅ Live | lincoln_routes_chat.py | Removed duplicate "ReAct loop" header (line 585) and stale P3 patch-instruction banner |
 
 ---
 
@@ -177,9 +179,8 @@ Things neither instance has fully resolved. Don't silently pick an answer — su
 | Q1 | Git Desktop authorship issue — what's the actual fix? | Unresolved (F9 above) | User to investigate |
 | Q2 | Gemma4:12b code quality vs Qwen3.5:9b — which is better for code tasks? | Not benchmarked | Next session when relevant |
 | Q3 | Should execution isolation (subprocess → sandbox) be P1 of the next build queue? | Not decided | Ask user |
-| Q4 | How should the two Claude instances divide work? | Proposed model below in §8 | Both instances to agree |
-| Q5 | Duplicate v0.7.0 version badge in topbar — shown twice top-left. Suspect lincoln_index.html or duplicate write from lincoln_chat.js/lincoln_sidebar.js. Not yet investigated. | Unresolved | First instance to start a build session |
-| Q6 | lincoln_routes_chat.py hygiene: duplicate "# ── ReAct loop ─..." comment header + leftover "APPEND this / RESTART REQUIRED" patch-instruction comment block still in shipped file. | Unresolved | First instance to start a build session |
+| Q4 | How should the two Claude instances divide work? | Proposed model below in §8 | Both instances to agree | — |
+
 ---
 
 ## 8. DUAL-INSTANCE COLLABORATION MODEL
