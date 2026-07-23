@@ -329,9 +329,7 @@ const lincolnSettings = (() => {
     `;
   }
 
-  // ── Section: Web Search ───────────────────────────────────────────────────
-
-  function _sectionWebSearch() {
+function _sectionWebSearch() {
     return `
       <h3 class="settings-pane-title">Web Search</h3>
       <div class="settings-field settings-field-row">
@@ -352,7 +350,12 @@ const lincolnSettings = (() => {
           <option value="ddg" ${_v('web_search_primary') === 'ddg' ? 'selected' : ''}>DuckDuckGo only (privacy)</option>
           <option value="google" ${_v('web_search_primary') === 'google' ? 'selected' : ''}>Google only (best results)</option>
         </select>
-        <p class="settings-hint">DDG uses Bing's index. Google has a fresher, larger index — better for financial data and breaking news. Requires GOOGLE_API_KEY and GOOGLE_CSE_ID in .env.</p>
+      </div>
+      <p class="settings-hint" style="margin-bottom:12px">
+        DDG uses Bing's index. Google has a fresher, larger index — better for
+        financial data and breaking news. Requires GOOGLE_API_KEY and GOOGLE_CSE_ID in .env.
+      </p>
+      <div class="settings-field settings-field-row">
         <label class="settings-label">Always-on search mode</label>
         <input type="checkbox" class="settings-checkbox" data-key="web_search_always_on"
           ${_v('web_search_always_on') === 'true' ? 'checked' : ''}>
