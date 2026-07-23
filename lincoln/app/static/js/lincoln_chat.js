@@ -1,23 +1,15 @@
 /**
- * Lincoln Chat  v0.7.0  Navigator
+ * Lincoln Chat  v0.7.3  Navigator
  * ==================================
- * Changes from v0.6.0:
- *   - Multi-file upload: _openNativePicker() now sets input.multiple = true.
- *     Each file is uploaded in sequence; all pending files are tracked in
- *     _pendingFiles[] (array). The pending chip shows a count badge when
- *     multiple files are attached ("3 files attached"). All file IDs are
- *     sent in the payload as file_ids[] array (backend updated to match).
- *   - _clearPendingFile() renamed to _clearPendingFiles() internally;
- *     public clearPendingFile() still works for backwards compat.
- *   - Topbar project badge now updates correctly on setActiveProject().
+ * Changes from v0.7.0:
+ *   - Globe pill always-on mode: web_search_always_on DB setting keeps
+ *     the globe pill active permanently. syncAlwaysOnSearch() loads the
+ *     setting on init and whenever settings change.
  *
- * ReAct patch (v0.7.0):
- *   - approval_required SSE event: pauses stream, shows approval card
- *   - tool_executing SSE event: shows spinner indicator per tool
- *   - tool_result SSE event: marks tool indicator as complete
- *   - search_query SSE event: shows toast with exact query string
- *   - _resolveApproval(): POSTs to /api/chat/resolve_tool, resumes stream
- *   - _showApprovalCard(): renders Approve/Deny UI inline in chat
+ * Changes from v0.7.0 (prior):
+ *   - Multi-file upload: _openNativePicker() now sets input.multiple = true.
+ *   - _clearPendingFile() renamed to _clearPendingFiles() internally.
+ *   - Topbar project badge now updates correctly on setActiveProject().
  */
 
 const lincolnChat = (() => {
@@ -26,13 +18,12 @@ const lincolnChat = (() => {
   let _activeProjectId   = null;
   let _activeProject     = null;
   let _isStreaming       = false;
-  // v0.7.0: multi-file — track array of {id, name, size, isImage}
   let _pendingFiles      = [];
-  // Kept for backward compat (older code may read these)
   let _pendingFileId     = null;
   let _pendingFileName   = null;
   let _thinkDropdownOpen = false;
   let _webSearchActive   = false;   // per-message globe toggle
+  let _webSearchAlwaysOn = false;   // persistent always-on mode
 
   const _THINK_MODES  = ['fast', 'normal', 'deep'];
   const _THINK_LABELS = {
@@ -89,11 +80,39 @@ const lincolnChat = (() => {
   }
 
   function _resetWebSearchPill() {
+    // If always-on mode is active, leave the pill ON after send
+    if (_webSearchAlwaysOn) return;
     _webSearchActive = false;
     const btn = document.getElementById('webSearchPill');
     if (btn) {
       btn.classList.remove('active');
       btn.title = 'Click to enable web search for next message';
+    }
+  }
+
+  // Called on init and by settings when the always-on toggle changes
+  async function syncAlwaysOnSearch() {
+    try {
+      const res  = await fetch('/api/settings');
+      const data = await res.json();
+      _webSearchAlwaysOn = (data.web_search_always_on === 'true');
+      if (_webSearchAlwaysOn) {
+        _webSearchActive = true;
+        const btn = document.getElementById('webSearchPill');
+        if (btn) {
+          btn.classList.add('active');
+          btn.title = 'Web search always ON (toggle off in Settings → Web Search)';
+        }
+      } else {
+        _webSearchActive = false;
+        const btn = document.getElementById('webSearchPill');
+        if (btn) {
+          btn.classList.remove('active');
+          btn.title = 'Click to enable web search for next message';
+        }
+      }
+    } catch (e) {
+      console.error('[Lincoln] syncAlwaysOnSearch failed:', e);
     }
   }
 
@@ -103,19 +122,7 @@ const lincolnChat = (() => {
     await _loadContextStrip();
     _updateThinkButton();
     _setupGlobalEscape();
-
-    // NEW: LocalStorage Draft Cache
-    const input = document.getElementById('chatInput');
-    if (input) {
-      const savedDraft = localStorage.getItem('lincoln_draft');
-      if (savedDraft) {
-        input.value = savedDraft;
-        autoResizeTextarea(input);
-      }
-      input.addEventListener('input', (e) => {
-        localStorage.setItem('lincoln_draft', e.target.value);
-      });
-    }
+    await syncAlwaysOnSearch();
   }
 
   // ── Session management ────────────────────────────────────────────────────
@@ -143,10 +150,8 @@ const lincolnChat = (() => {
     _clearMessages();
     _clearPendingFile();
     if (typeof lincolnCanvas !== 'undefined') lincolnCanvas.clear();
-    // Reset topbar badge
     const badge = document.getElementById('topbarProjectBadge');
     if (badge) badge.textContent = 'No project';
-    // Deselect project in sidebar
     if (typeof lincolnSidebar !== 'undefined') {
       document.querySelectorAll('.sidebar-project-item').forEach(el => el.classList.remove('active'));
       document.querySelectorAll('.project-dot').forEach(dot => dot.classList.remove('active'));
@@ -198,7 +203,6 @@ const lincolnChat = (() => {
   function setActiveProject(projectId, project) {
     _activeProjectId = projectId;
     _activeProject   = project;
-    // Update topbar badge
     const badge = document.getElementById('topbarProjectBadge');
     if (badge) badge.textContent = project?.display_name || 'No project';
   }
@@ -220,16 +224,13 @@ const lincolnChat = (() => {
 
     await _ensureSession();
 
-    // Capture and reset per-message state before clearing input
     const useWebSearch = _webSearchActive;
     _resetWebSearchPill();
 
     input.value = '';
-    localStorage.removeItem('lincoln_draft');
     autoResizeTextarea(input);
     _hideWelcome();
 
-    // Multi-file: build display text and capture file IDs before clearing
     let displayText = text;
     let fileIds     = [];
     if (_pendingFiles.length === 1) {
@@ -338,35 +339,17 @@ const lincolnChat = (() => {
               _showWebSearchIndicator(assistantEl, event.result_count || 0);
             }
 
-            // ── ReAct tool events ─────────────────────────────────────────
-
-            if (event.type === 'tool_executing') {
-              _showToolExecutingIndicator(assistantEl, event.tool_name, event.arguments);
-            }
-
-            if (event.type === 'tool_result') {
-              _updateToolExecutingIndicator(assistantEl, event.tool_name, event.result_preview);
-            }
-
-            if (event.type === 'search_query') {
-              _showToast(`🔍 Searching: "${event.query}"`, 'info');
-            }
-
-            if (event.type === 'approval_required') {
-              cursor.remove();
-              _setStreaming(false);
-              _showApprovalCard(
-                assistantEl, event, _sessionId,
-                lincolnSettings?.activeModel || 'qwen3.5:9b',
-                _activeProjectId, _thinkMode
-              );
-              return;
-            }
-
-            // ── End ReAct tool events ─────────────────────────────────────
-
             if (event.type === 'ban_check' && event.violations?.length) {
               _showBanCheckWarning(assistantEl, event.violations);
+            }
+
+            if (event.type === 'tool_approval_required') {
+              cursor.remove();
+              _showApprovalCard(assistantEl, event);
+            }
+
+            if (event.type === 'tool_executing') {
+              _showToolExecutingIndicator(assistantEl, event.tool_name);
             }
 
             if (event.type === 'done') {
@@ -397,9 +380,7 @@ const lincolnChat = (() => {
               bubbleEl.textContent = `Error: ${event.message}`;
               bubbleEl.style.color = 'var(--text-danger)';
             }
-          } catch (err) {
-            console.error('[Lincoln] SSE event handling failed in sendMessage:', err, 'raw line:', line);
-          }
+          } catch (_) { /* malformed SSE line, skip */ }
         }
       }
     } catch (err) {
@@ -409,6 +390,183 @@ const lincolnChat = (() => {
     }
 
     _setStreaming(false);
+  }
+
+  // ── Tool approval card ────────────────────────────────────────────────────
+
+  function _showApprovalCard(messageEl, event) {
+    const body = messageEl.querySelector('.message-body');
+    if (!body) return;
+
+    const argsStr = JSON.stringify(event.arguments || {}, null, 2);
+    const card = document.createElement('div');
+    card.className = 'tool-approval-card';
+    card.dataset.toolCallId = event.tool_call_id;
+    card.innerHTML = `
+      <div class="tool-approval-header">
+        <i class="ti ti-tool"></i>
+        <strong>${_esc(event.tool_name)}</strong>
+        <span class="tool-approval-badge">Approval required</span>
+      </div>
+      <pre class="tool-approval-args"><code>${_esc(argsStr)}</code></pre>
+      <div class="tool-approval-actions">
+        <button class="btn-approve" onclick="lincolnChat._approveToolCall('${_esc(event.tool_call_id)}', '${_esc(event.session_id)}')">
+          <i class="ti ti-check"></i> Approve
+        </button>
+        <button class="btn-deny" onclick="lincolnChat._denyToolCall('${_esc(event.tool_call_id)}', '${_esc(event.session_id)}', this.closest('.tool-approval-card'))">
+          <i class="ti ti-x"></i> Deny
+        </button>
+      </div>
+    `;
+    body.appendChild(card);
+    _scrollToBottom();
+  }
+
+  async function _approveToolCall(toolCallId, sessionId) {
+    const card = document.querySelector(`.tool-approval-card[data-tool-call-id="${toolCallId}"]`);
+    if (card) {
+      card.classList.add('approved');
+      card.querySelector('.tool-approval-actions').innerHTML =
+        '<span class="tool-status-approved"><i class="ti ti-check"></i> Approved — executing…</span>';
+    }
+
+    const container   = document.getElementById('chatMessages');
+    const assistantEl = container?.lastElementChild;
+    const bubbleEl    = assistantEl?.querySelector('.message-bubble');
+    const cursor      = document.createElement('span');
+    cursor.className  = 'streaming-cursor';
+    if (bubbleEl) bubbleEl.appendChild(cursor);
+
+    let fullText = '';
+    let sources  = [];
+
+    try {
+      const response = await fetch('/api/chat/resolve_tool', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          tool_call_id: toolCallId,
+          session_id:   sessionId,
+          approved:     true,
+        }),
+      });
+
+      const reader  = response.body.getReader();
+      const decoder = new TextDecoder();
+      let   buffer  = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+
+            if (event.type === 'token' && bubbleEl) {
+              fullText += event.content;
+              bubbleEl.textContent = fullText;
+              bubbleEl.appendChild(cursor);
+              _scrollToBottom();
+            }
+
+            if (event.type === 'tool_approval_required') {
+              cursor.remove();
+              _showApprovalCard(assistantEl, event);
+            }
+
+            if (event.type === 'tool_executing') {
+              _showToolExecutingIndicator(assistantEl, event.tool_name);
+            }
+
+            if (event.type === 'sources') {
+              sources = event.sources || [];
+            }
+
+            if (event.type === 'done') {
+              cursor.remove();
+              if (bubbleEl) _renderFinalMessage(bubbleEl, fullText, sources, assistantEl);
+              _scrollToBottom();
+
+              if (typeof lincolnCanvas !== 'undefined' && fullText) {
+                const blocks = lincolnCanvas.extractCodeBlocks(fullText);
+                const text   = document.getElementById('chatInput')?.value || '';
+                blocks.forEach((block, i) => {
+                  const base     = _deriveFilename(text, block.language);
+                  const suffix   = blocks.length > 1 ? `_part${i + 1}` : '';
+                  const baseName = base.replace(/(\.[^.]+)$/, suffix + '$1');
+                  lincolnCanvas.pinCodeBlock({
+                    language:    block.language,
+                    filename:    lincolnCanvas.resolveFilename(baseName, _sessionId),
+                    content:     block.content,
+                    projectName: _activeProject?.display_name || '',
+                    sessionId:   _sessionId,
+                  });
+                });
+              }
+              if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadHistory();
+            }
+
+            if (event.type === 'error') {
+              cursor.remove();
+              if (bubbleEl) {
+                bubbleEl.textContent = `Error: ${event.message}`;
+                bubbleEl.style.color = 'var(--text-danger)';
+              }
+            }
+          } catch (_) { /* malformed SSE line */ }
+        }
+      }
+    } catch (err) {
+      cursor.remove();
+      if (bubbleEl) {
+        bubbleEl.textContent = `Connection error: ${err.message}`;
+        bubbleEl.style.color = 'var(--text-danger)';
+      }
+    }
+
+    _setStreaming(false);
+  }
+
+  async function _denyToolCall(toolCallId, sessionId, cardEl) {
+    if (cardEl) {
+      cardEl.classList.add('denied');
+      cardEl.querySelector('.tool-approval-actions').innerHTML =
+        '<span class="tool-status-denied"><i class="ti ti-x"></i> Denied</span>';
+    }
+
+    try {
+      await fetch('/api/chat/resolve_tool', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          tool_call_id: toolCallId,
+          session_id:   sessionId,
+          approved:     false,
+        }),
+      });
+    } catch (err) {
+      console.error('[Lincoln] deny tool call error:', err);
+    }
+    _setStreaming(false);
+  }
+
+  function _showToolExecutingIndicator(messageEl, toolName) {
+    const body = messageEl?.querySelector('.message-body');
+    if (!body) return;
+    const existing = body.querySelector('.tool-executing-indicator');
+    if (existing) existing.remove();
+    const el = document.createElement('div');
+    el.className = 'tool-executing-indicator';
+    el.innerHTML = `<span class="tool-spinner"></span> Running <strong>${_esc(toolName)}</strong>…`;
+    body.appendChild(el);
+    _scrollToBottom();
+    setTimeout(() => el.remove(), 8000);
   }
 
   // ── Web search indicator ──────────────────────────────────────────────────
@@ -427,7 +585,6 @@ const lincolnChat = (() => {
   function _showBanCheckWarning(messageEl, violations) {
     const body = messageEl.querySelector('.message-body');
     if (!body) return;
-
     const banner = document.createElement('div');
     banner.className = 'ban-check-banner';
     banner.innerHTML = `
@@ -451,241 +608,6 @@ const lincolnChat = (() => {
     body.appendChild(banner);
   }
 
-  // ── ReAct: Tool executing indicator ──────────────────────────────────────
-
-  function _showToolExecutingIndicator(messageEl, toolName, args) {
-    const body = messageEl.querySelector('.message-body');
-    if (!body) return;
-
-    body.querySelector('.tool-executing-indicator')?.remove();
-
-    const icons = {
-      rag_query:       'ti-database-search',
-      read_file:       'ti-file-code',
-      web_search:      'ti-world-search',
-      execute_python:  'ti-brand-python',
-      execute_fortran: 'ti-cpu',
-      write_file:      'ti-file-pencil',
-      run_aider:       'ti-terminal-2',
-    };
-
-    const el = document.createElement('div');
-    el.className    = 'tool-executing-indicator';
-    el.dataset.tool = toolName;
-    el.innerHTML    = `
-      <div class="tool-indicator-inner">
-        <i class="ti ${icons[toolName] || 'ti-tool'} tool-indicator-icon"></i>
-        <span class="tool-indicator-name">${_esc(toolName.replace(/_/g, ' '))}</span>
-        <span class="tool-indicator-spinner"></span>
-      </div>
-    `;
-    body.insertBefore(el, body.querySelector('.message-bubble'));
-  }
-
-  function _updateToolExecutingIndicator(messageEl, toolName, resultPreview) {
-    const el = messageEl.querySelector(`.tool-executing-indicator[data-tool="${toolName}"]`);
-    if (!el) return;
-    el.querySelector('.tool-indicator-spinner')?.remove();
-    el.querySelector('.tool-indicator-inner')?.insertAdjacentHTML(
-      'beforeend',
-      `<i class="ti ti-check tool-indicator-done"></i>`
-    );
-    setTimeout(() => el.classList.add('tool-indicator-collapsed'), 2000);
-  }
-
-  // ── ReAct: Approval card ──────────────────────────────────────────────────
-
-  function _showApprovalCard(messageEl, event, sessionId, model, projectId, thinkMode) {
-    const body = messageEl.querySelector('.message-body');
-    if (!body) return;
-
-    const toolName = event.tool_name;
-    const args     = event.arguments;
-    const tier     = event.tier || 'write';
-    const reason   = event.reason || 'This action requires your approval.';
-
-    let argsDisplay = JSON.stringify(args, null, 2);
-    if (argsDisplay.length > 800) argsDisplay = argsDisplay.slice(0, 800) + '\n... (truncated)';
-
-    const headerContent = toolName === 'web_search'
-      ? `<div class="approval-search-query">
-           <i class="ti ti-world-search"></i>
-           <span>${_esc(args.query || '')}</span>
-         </div>`
-      : `<pre class="approval-args-pre">${_esc(argsDisplay)}</pre>`;
-
-    const tierLabel = tier === 'search' ? '🔍 Web Search Request' : '⚠️ Action Required';
-    const tierClass = tier === 'search' ? 'approval-card-search' : 'approval-card-write';
-
-    const safeModel    = _esc(model || 'qwen3.5:9b');
-    const safeThink    = _esc(thinkMode || 'normal');
-    const safeProject  = projectId != null ? projectId : 'null';
-
-    const card = document.createElement('div');
-    card.className = `approval-card ${tierClass}`;
-    card.innerHTML = `
-      <div class="approval-card-header">
-        <strong>${tierLabel}</strong>
-        <span class="approval-tool-name">${_esc(toolName.replace(/_/g, ' '))}</span>
-      </div>
-      <div class="approval-card-reason">${_esc(reason)}</div>
-      ${headerContent}
-      <div class="approval-card-actions">
-        <button class="approval-btn-approve"
-          onclick="lincolnChat._resolveApproval(true, ${sessionId}, '${safeModel}', ${safeProject}, '${safeThink}', this.closest('.approval-card'))">
-          <i class="ti ti-check"></i> Approve
-        </button>
-        <button class="approval-btn-deny"
-          onclick="lincolnChat._resolveApproval(false, ${sessionId}, '${safeModel}', ${safeProject}, '${safeThink}', this.closest('.approval-card'))">
-          <i class="ti ti-x"></i> Deny
-        </button>
-      </div>
-    `;
-
-    const bubble = body.querySelector('.message-bubble');
-    if (bubble) body.insertBefore(card, bubble);
-    else body.appendChild(card);
-  }
-
-  // ── ReAct: Resolve approval ───────────────────────────────────────────────
-
-  async function _resolveApproval(approved, sessionId, model, projectId, thinkMode, cardEl) {
-    cardEl?.querySelectorAll('button').forEach(b => b.disabled = true);
-
-    const statusEl = document.createElement('div');
-    statusEl.className   = 'approval-resolving';
-    statusEl.textContent = approved ? 'Executing…' : 'Denied.';
-    cardEl?.appendChild(statusEl);
-
-    if (!approved) {
-      setTimeout(() => cardEl?.classList.add('approval-card-dismissed'), 500);
-    }
-
-    const container      = document.getElementById('chatMessages');
-    const lastAssistant  = container?.querySelector('.lincoln-message:last-child');
-    const targetEl       = lastAssistant || _appendAssistantMessage('', []);
-    const bubbleEl       = targetEl.querySelector('.message-bubble');
-
-    _setStreaming(true);
-    const cursor = document.createElement('span');
-    cursor.className = 'streaming-cursor';
-    if (bubbleEl) bubbleEl.appendChild(cursor);
-
-    let fullText = '';
-
-    try {
-      const response = await fetch('/api/chat/resolve_tool', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          session_id: sessionId,
-          approved:   approved,
-          model:      model,
-          project_id: projectId,
-          think_mode: thinkMode,
-        }),
-      });
-
-      const reader  = response.body.getReader();
-      const decoder = new TextDecoder();
-      let   buffer  = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-
-            if (event.type === 'token' && bubbleEl) {
-              fullText += event.content;
-              bubbleEl.textContent = fullText;
-              bubbleEl.appendChild(cursor);
-              _scrollToBottom();
-            }
-
-            if (event.type === 'tool_executing') {
-              _showToolExecutingIndicator(targetEl, event.tool_name, event.arguments);
-            }
-
-            if (event.type === 'tool_result') {
-              _updateToolExecutingIndicator(targetEl, event.tool_name, event.result_preview);
-            }
-
-            if (event.type === 'tool_denied') {
-              _showToast(`Tool denied: ${event.tool_name}`, 'info');
-            }
-
-            if (event.type === 'approval_required') {
-              // Nested approval — another gated tool in the same ReAct chain
-              cursor.remove();
-              _setStreaming(false);
-              _showApprovalCard(targetEl, event, sessionId, model, projectId, thinkMode);
-              return;
-            }
-
-            if (event.type === 'done') {
-              cursor.remove();
-              if (bubbleEl) {
-                if (fullText) {
-                  // Render markdown for the LLM's post-execution response
-                  _renderFinalMessage(bubbleEl, fullText, [], targetEl);
-                  // Pin any code blocks in the response to canvas
-                  if (typeof lincolnCanvas !== 'undefined') {
-                    const blocks = lincolnCanvas.extractCodeBlocks(fullText);
-                    blocks.forEach((block, i) => {
-                      const suffix   = blocks.length > 1 ? `_part${i + 1}` : '';
-                      const ext      = _LANG_EXT[block.language] || '.py';
-                      const baseName = 'executed_code' + suffix + ext;
-                      lincolnCanvas.pinCodeBlock({
-                        language:    block.language,
-                        filename:    lincolnCanvas.resolveFilename(baseName, sessionId),
-                        content:     block.content,
-                        projectName: '',
-                        sessionId:   sessionId,
-                      });
-                    });
-                  }
-                } else {
-                  // Qwen streamed zero tokens — tool output shown by indicator above;
-                  // leave a minimal acknowledgement in the bubble.
-                  bubbleEl.innerHTML =
-                    '<span class="tool-executed-ack">✓ Executed — see tool output above.</span>';
-                }
-              }
-              cardEl?.classList.add('approval-card-dismissed');
-              _scrollToBottom();
-              if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadHistory();
-            }
-
-            if (event.type === 'error') {
-              cursor.remove();
-              if (bubbleEl) {
-                bubbleEl.textContent = `Error: ${event.message}`;
-                bubbleEl.style.color = 'var(--text-danger)';
-              }
-            }
-          } catch (err) {
-            console.error('[Lincoln] SSE event handling failed in _resolveApproval:', err, 'raw line:', line);
-          }
-        }
-      }
-    } catch (err) {
-      cursor.remove();
-      if (bubbleEl) {
-        bubbleEl.textContent = `Connection error: ${err.message}`;
-        bubbleEl.style.color = 'var(--text-danger)';
-      }
-    }
-
-    _setStreaming(false);
-  }
-
   // ── File upload ───────────────────────────────────────────────────────────
 
   function openFileAttach() {
@@ -693,8 +615,6 @@ const lincolnChat = (() => {
       lincolnSidebar.openFileBrowser('file', async (fileOrPath) => {
         if (fileOrPath instanceof File) {
           await _uploadFileBlob(fileOrPath);
-        } else if (typeof fileOrPath === 'string' && fileOrPath) {
-          _openNativePicker();
         } else {
           _openNativePicker();
         }
@@ -763,7 +683,6 @@ const lincolnChat = (() => {
       });
       _pendingFileId   = _pendingFiles[_pendingFiles.length - 1].id;
       _pendingFileName = _pendingFiles[_pendingFiles.length - 1].name;
-
       _updatePendingChip();
 
     } catch (err) {
@@ -833,12 +752,10 @@ const lincolnChat = (() => {
       const res     = await fetch('/api/history/context');
       const entries = await res.json();
       if (!entries.length) return;
-
       const latest  = entries[0];
       const strip   = document.getElementById('contextStrip');
       const content = document.getElementById('contextStripContent');
       if (!strip || !content) return;
-
       content.innerHTML = `<strong>Last session</strong> — ${_esc(latest.content)}`;
       strip.style.display = 'flex';
     } catch (_) { }
@@ -850,9 +767,7 @@ const lincolnChat = (() => {
 
   // ── Save memory ───────────────────────────────────────────────────────────
 
-  async function saveMemory() {
-    _openMemoryModal();
-  }
+  async function saveMemory() { _openMemoryModal(); }
 
   function _openMemoryModal() {
     let modal = document.getElementById('memoryInputModal');
@@ -868,20 +783,13 @@ const lincolnChat = (() => {
               <i class="ti ti-x"></i>
             </button>
           </div>
-          <p class="modal-hint">
-            This summary will appear as context at the top of your next Lincoln session.
-            Keep it concise — what are the key facts to carry forward?
-          </p>
+          <p class="modal-hint">Keep it concise — what are the key facts to carry forward?</p>
           <textarea id="memoryModalText" class="modal-textarea"
-            placeholder="e.g. BASIN-RERUN-M1 blocked until Aug. rfree2=0.011. Tickers: AMZN AAPL META MSFT."
+            placeholder="e.g. BASIN-RERUN-M1 blocked until Aug. rfree2=0.011."
             rows="5"></textarea>
           <div class="modal-actions">
-            <button class="btn-secondary" onclick="document.getElementById('memoryInputModal').remove()">
-              Cancel
-            </button>
-            <button class="btn-primary" onclick="lincolnChat._submitMemory()">
-              Save to memory
-            </button>
+            <button class="btn-secondary" onclick="document.getElementById('memoryInputModal').remove()">Cancel</button>
+            <button class="btn-primary" onclick="lincolnChat._submitMemory()">Save to memory</button>
           </div>
         </div>
       `;
@@ -894,16 +802,11 @@ const lincolnChat = (() => {
   async function _submitMemory() {
     const text = document.getElementById('memoryModalText')?.value.trim();
     if (!text) return;
-
     try {
       const res = await fetch('/api/history/context', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          content:    text,
-          project_id: _activeProjectId,
-          tag:        'session_summary',
-        }),
+        body:    JSON.stringify({ content: text, project_id: _activeProjectId, tag: 'session_summary' }),
       });
       if (res.ok) {
         document.getElementById('memoryInputModal')?.remove();
@@ -922,31 +825,18 @@ const lincolnChat = (() => {
   (function _initMarked() {
     if (typeof marked === 'undefined' || typeof hljs === 'undefined') return;
     const renderer = new marked.Renderer();
-    renderer.code  = function (codeOrToken, maybeLang) {
-      // marked v5+ (we load v9.1.6) calls renderer.code(token) with a SINGLE
-      // object argument: { type, raw, lang, text, escaped }. Older marked
-      // versions called renderer.code(codeString, langString, escaped) with
-      // three positional args. Support both so a marked version bump never
-      // silently breaks rendering again.
-      let code, rawLang;
-      if (codeOrToken && typeof codeOrToken === 'object') {
-        code    = codeOrToken.text ?? '';
-        rawLang = codeOrToken.lang ?? '';
-      } else {
-        code    = codeOrToken ?? '';
-        rawLang = (typeof maybeLang === 'object' ? maybeLang?.lang : maybeLang) || '';
-      }
-      // Language token can carry extra info after a space (e.g. "python title=x") — take first word.
-      const language = (rawLang || '').trim().split(/\s+/)[0] || '';
-
+    renderer.code  = function (token) {
+      // marked v9+: single token object {type, raw, lang, text, escaped}
+      const rawCode = (typeof token === 'object' && token !== null) ? (token.text || token.raw || '') : token;
+      const rawLang = (typeof token === 'object' && token !== null) ? (token.lang || '') : (arguments[1] || '');
+      const language = rawLang || '';
       let escaped;
       try {
         escaped = language && hljs.getLanguage(language)
-          ? hljs.highlight(code, { language }).value
-          : hljs.highlightAuto(code).value;
-      } catch (e) {
-        console.error('[Lincoln] hljs highlight failed, falling back to escaped text:', e);
-        escaped = _esc(code);
+          ? hljs.highlight(rawCode, { language }).value
+          : hljs.highlightAuto(rawCode).value;
+      } catch (_) {
+        escaped = _esc(rawCode);
       }
       const cls = language ? ` class="language-${language} hljs"` : ' class="hljs"';
       return `<pre><code${cls}>${escaped}</code></pre>`;
@@ -955,36 +845,19 @@ const lincolnChat = (() => {
   })();
 
   function _md(text) {
-    if (typeof marked !== 'undefined') {
-      try {
-        return marked.parse(text || '');
-      } catch (e) {
-        console.error('[Lincoln] marked.parse failed, falling back to plain renderer:', e);
-        // Fall through to the plain fallback below rather than losing the message.
-      }
-    }
-    return _esc(text)
-      .replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _l, body) => `<pre><code>${body}</code></pre>`)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\n/g, '<br>');
+    if (typeof marked !== 'undefined') return marked.parse(text || '');
+    return _esc(text).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\n/g, '<br>');
   }
 
   function _applyFormatting(element) {
     if (!element) return;
     if (typeof hljs !== 'undefined') {
-      element.querySelectorAll('pre code:not(.hljs)').forEach(block => {
-        hljs.highlightElement(block);
-      });
+      element.querySelectorAll('pre code:not(.hljs)').forEach(block => hljs.highlightElement(block));
     }
     if (typeof renderMathInElement !== 'undefined') {
-      // NOTE: bare $ delimiter is INTENTIONALLY excluded.
-      // Using $ as a math delimiter causes financial text like "$200 billion"
-      // to be incorrectly parsed as LaTeX, concatenating words into broken output.
-      // Only explicit delimiters ($$...$$, \[...\], \(...\)) trigger math rendering.
       renderMathInElement(element, {
         delimiters: [
-          { left: '$$', right: '$$',   display: true  },
+          { left: '$$',  right: '$$',   display: true  },
           { left: '\\[', right: '\\]', display: true  },
           { left: '\\(', right: '\\)', display: false },
         ],
@@ -1068,8 +941,7 @@ const lincolnChat = (() => {
             <div class="project-home-subtitle">What are we working on today?</div>
           </div>
           <button class="project-home-new-chat" onclick="lincolnChat.startNewChat()">
-            <i class="ti ti-plus" aria-hidden="true"></i>
-            New chat
+            <i class="ti ti-plus" aria-hidden="true"></i> New chat
           </button>
           <div class="project-home-recents" id="projectHomeRecents">
             <div style="font-size:11px;color:var(--text-muted);padding:8px 0">Loading recent chats…</div>
@@ -1108,9 +980,7 @@ const lincolnChat = (() => {
           <div class="project-home-chat-date">${_fmtDate(s.updated_at)}</div>
         </div>
       `).join('');
-    } catch (_) {
-      recentsEl.innerHTML = '';
-    }
+    } catch (_) { recentsEl.innerHTML = ''; }
   }
 
   function startNewChat() {
@@ -1124,25 +994,15 @@ const lincolnChat = (() => {
   function _setupGlobalEscape() {
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
-
       const input = document.getElementById('chatInput');
       if (document.activeElement === input) { input.blur(); return; }
-
       const modal = document.querySelector('.modal-overlay[style*="flex"]');
       if (modal) { modal.style.display = 'none'; return; }
-
       const overlay = document.querySelector('.overlay[style*="flex"]');
       if (overlay) { overlay.style.display = 'none'; return; }
-
       if (_thinkDropdownOpen) { closeThinkDropdown(); return; }
-
-      if (typeof lincolnCanvas !== 'undefined' && lincolnCanvas.hasSelection?.()) {
-        lincolnCanvas.clearSelection(); return;
-      }
-
-      if (typeof lincolnSidebar !== 'undefined' && lincolnSidebar.hasSelection?.()) {
-        lincolnSidebar.clearSelection(); return;
-      }
+      if (typeof lincolnCanvas !== 'undefined' && lincolnCanvas.hasSelection?.()) { lincolnCanvas.clearSelection(); return; }
+      if (typeof lincolnSidebar !== 'undefined' && lincolnSidebar.hasSelection?.()) { lincolnSidebar.clearSelection(); return; }
     });
   }
 
@@ -1160,10 +1020,7 @@ const lincolnChat = (() => {
     toast.textContent = message;
     container.appendChild(toast);
     setTimeout(() => toast.classList.add('toast-visible'), 10);
-    setTimeout(() => {
-      toast.classList.remove('toast-visible');
-      setTimeout(() => toast.remove(), 300);
-    }, 3500);
+    setTimeout(() => { toast.classList.remove('toast-visible'); setTimeout(() => toast.remove(), 300); }, 3500);
   }
 
   // ── Utilities ─────────────────────────────────────────────────────────────
@@ -1184,33 +1041,11 @@ const lincolnChat = (() => {
     input.focus();
   }
 
-  function _hideWelcome() {
-    document.getElementById('lincolnWelcome')?.remove();
-  }
-
-  function _scrollToBottom() {
-    const c = document.getElementById('chatMessages');
-    if (c) c.scrollTop = c.scrollHeight;
-  }
-
-  function _setStreaming(active) {
-    _isStreaming = active;
-    const btn = document.getElementById('sendBtn');
-    if (btn) btn.disabled = active;
-  }
-
-  function _esc(str) {
-    const d = document.createElement('div');
-    d.textContent = str || '';
-    return d.innerHTML;
-  }
-
-  function _escEl(str) {
-    const d = document.createElement('div');
-    d.textContent = str || '';
-    return d.innerHTML;
-  }
-
+  function _hideWelcome() { document.getElementById('lincolnWelcome')?.remove(); }
+  function _scrollToBottom() { const c = document.getElementById('chatMessages'); if (c) c.scrollTop = c.scrollHeight; }
+  function _setStreaming(active) { _isStreaming = active; const btn = document.getElementById('sendBtn'); if (btn) btn.disabled = active; }
+  function _esc(str) { const d = document.createElement('div'); d.textContent = str || ''; return d.innerHTML; }
+  function _escEl(str) { const d = document.createElement('div'); d.textContent = str || ''; return d.innerHTML; }
   function _fmtDate(isoStr) {
     if (!isoStr) return '';
     const d = new Date(isoStr), now = new Date();
@@ -1219,108 +1054,37 @@ const lincolnChat = (() => {
   }
 
   const _LANG_EXT = {
-    python: '.py',      fortran: '.f90',    javascript: '.js',
-    typescript: '.ts',  html: '.html',      css: '.css',
-    sql: '.sql',        bash: '.sh',        sh: '.sh',
-    json: '.json',      markdown: '.md',    r: '.r',
-    cpp: '.cpp',        c: '.c',            java: '.java',
-    rust: '.rs',        go: '.go',          ruby: '.rb',
-    text: '.txt',
-    julia: '.jl',       matlab: '.m',       mathematica: '.nb',
-    wolfram: '.wl',     rmarkdown: '.Rmd',  sas: '.sas',
-    stata: '.do',       gams: '.gms',       ampl: '.ampl',
-    lp: '.lp',          maple: '.mpl',      latex: '.tex',
-    bibtex: '.bib',     powershell: '.ps1', batch: '.bat',
+    python: '.py', fortran: '.f90', javascript: '.js', typescript: '.ts',
+    html: '.html', css: '.css', sql: '.sql', bash: '.sh', sh: '.sh',
+    json: '.json', markdown: '.md', r: '.r', cpp: '.cpp', c: '.c',
+    java: '.java', rust: '.rs', go: '.go', ruby: '.rb', text: '.txt',
+    julia: '.jl', matlab: '.m', mathematica: '.nb', wolfram: '.wl',
+    rmarkdown: '.Rmd', sas: '.sas', stata: '.do', gams: '.gms',
+    ampl: '.ampl', lp: '.lp', maple: '.mpl', latex: '.tex',
+    bibtex: '.bib', powershell: '.ps1', batch: '.bat',
   };
 
   function _deriveFilename(userText, language) {
     const ext = _LANG_EXT[language] || '.txt';
-
     const lincolnMatch = userText.match(/\b(lincoln_[A-Za-z0-9_]+(?:\.[A-Za-z0-9]+)?)\b/i);
     if (lincolnMatch) {
       const name = lincolnMatch[1];
       return name.includes('.') ? name : name + ext;
     }
-
     const FILLER = /\b(the|a|an|please|can|you|write|make|create|build|give|me|i|want|need|fix|update|rewrite|add|new|version|of|for|with|that|this|and|or|in|to|my|code|file|script|function|class|module|using|show|get|set|just|also|now|here|it|its|is|are|was|were|be|been|being)\b/gi;
-    const slug = userText
-      .replace(FILLER, ' ')
-      .replace(/[^A-Za-z0-9\s]/g, ' ')
-      .trim()
-      .split(/\s+/)
-      .filter(w => w.length > 1)
-      .slice(0, 5)
-      .join('_')
-      .toLowerCase() || 'code';
-
+    const slug = userText.replace(FILLER, ' ').replace(/[^A-Za-z0-9\s]/g, ' ').trim()
+      .split(/\s+/).filter(w => w.length > 1).slice(0, 5).join('_').toLowerCase() || 'code';
     return slug + ext;
   }
 
-  function showWelcome() {
-    _sessionId = null;
-    _clearMessages();
-  }
+  function showWelcome() { _sessionId = null; _clearMessages(); }
+  function showProjectHome(project) { _sessionId = null; _activeProject = project; _clearMessages(); }
 
-  function showProjectHome(project) {
-    _sessionId     = null;
-    _activeProject = project;
-    _clearMessages();
-  }
-
-  // Close think dropdown when clicking outside
   document.addEventListener('click', (e) => {
     const pill = document.getElementById('thinkModePill');
     const dd   = document.getElementById('thinkDropdown');
-    if (pill && dd && !pill.contains(e.target) && !dd.contains(e.target)) {
-      closeThinkDropdown();
-    }
+    if (pill && dd && !pill.contains(e.target) && !dd.contains(e.target)) closeThinkDropdown();
   });
-
-  // ── Agentic Memory Context Save ───────────────────────────────────────────
-  
-  async function saveAgenticMemory() {
-    const bubbles = document.querySelectorAll('.lincoln-message');
-    if (!bubbles.length) {
-      _showToast('No chat history to save.', 'error');
-      return;
-    }
-
-    // Scrape the DOM for the current chat context
-    let contextString = '';
-    bubbles.forEach(msg => {
-      const isUser = msg.classList.contains('user-message');
-      const text = msg.querySelector('.message-bubble')?.innerText || '';
-      contextString += (isUser ? 'User: ' : 'Lincoln: ') + text + '\n\n';
-    });
-
-    const payload = {
-      project_id: _activeProjectId || null,
-      date: new Date().toISOString(),
-      context: contextString,
-      instruction: "Extract core facts, project decisions, and architectural rules from this context and save them to long-term memory."
-    };
-
-    _showToast('Analyzing session and saving to memory...', 'info');
-
-    try {
-      const response = await fetch('/api/history/memory/auto', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (response.ok) {
-        _showToast("Session successfully extracted and saved to memory!", 'success');
-        if (typeof lincolnSidebar !== 'undefined') lincolnSidebar.loadMemory?.();
-      } else {
-        const data = await response.json();
-        _showToast(data.error || "Failed to save memory.", 'error');
-      }
-    } catch (error) {
-      console.error("Memory save error:", error);
-      _showToast("Error saving to memory.", 'error');
-    }
-  }
 
   return {
     init,
@@ -1343,15 +1107,12 @@ const lincolnChat = (() => {
     closeThinkDropdown,
     setThinkMode,
     toggleWebSearch,
+    syncAlwaysOnSearch,
     showWelcome,
     showProjectHome,
-    showToast:                    _showToast,
-    // ReAct approval — called by inline onclick handlers in approval cards
-    _resolveApproval,
-    _showApprovalCard,
-    _showToolExecutingIndicator,
-    _updateToolExecutingIndicator,
-    saveAgenticMemory
+    showToast: _showToast,
+    _approveToolCall,
+    _denyToolCall,
   };
 
 })();
