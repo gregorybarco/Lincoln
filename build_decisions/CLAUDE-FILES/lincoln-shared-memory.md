@@ -177,7 +177,8 @@ Things neither instance has fully resolved. Don't silently pick an answer — su
 | Q2 | Gemma4:12b code quality vs Qwen3.5:9b — which is better for code tasks? | Not benchmarked | Next session when relevant |
 | Q3 | Should execution isolation (subprocess → sandbox) be P1 of the next build queue? | Not decided | Ask user |
 | Q4 | How should the two Claude instances divide work? | Proposed model below in §8 | Both instances to agree |
-
+| Q5 | Duplicate v0.7.0 version badge in topbar — shown twice top-left. Suspect lincoln_index.html or duplicate write from lincoln_chat.js/lincoln_sidebar.js. Not yet investigated. | Unresolved | First instance to start a build session |
+| Q6 | lincoln_routes_chat.py hygiene: duplicate "# ── ReAct loop ─..." comment header + leftover "APPEND this / RESTART REQUIRED" patch-instruction comment block still in shipped file. | Unresolved | First instance to start a build session |
 ---
 
 ## 8. DUAL-INSTANCE COLLABORATION MODEL
