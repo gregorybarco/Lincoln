@@ -583,7 +583,7 @@ def send_message():
         ]
 
         # ── ReAct loop ────────────────────────────────────────────────────────
-# ── Emit ctx_update before loop so indicator appears immediately ──────
+        # ── Emit ctx_update before loop so indicator appears immediately ──────
         try:
             from lincoln.lincoln_ollama_service import resolve_hardware_ceiling
             _ctx_chars   = sum(len(m.get("content", "")) for m in history)
