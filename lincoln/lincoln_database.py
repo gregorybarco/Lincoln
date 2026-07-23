@@ -146,6 +146,8 @@ _DEFAULT_SETTINGS = {
     "oneapi_path":                  "C:\\Program Files (x86)\\Intel\\oneAPI",
     # Aider
     "aider_launch_mode":            "cmd",
+    # Vision / OCR
+    "vision_model":                 "minicpm-v4.5:8b",
     # Version (DB-backed so it is editable from Settings UI without touching __init__.py)
     "lincoln_version":              "0.7.0",
     "lincoln_codename":             "Navigator",

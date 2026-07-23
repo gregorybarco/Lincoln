@@ -87,6 +87,11 @@ _EDITABLE_KEYS = {
     "maple_path",
     "oneapi_path",
     "aider_launch_mode",
+    # Vision
+    "vision_model",
+    # Version (DB-backed, editable without touching __init__.py)
+    "lincoln_version",
+    "lincoln_codename",
 }
 
 

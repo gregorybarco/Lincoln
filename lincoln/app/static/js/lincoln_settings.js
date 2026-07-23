@@ -430,8 +430,31 @@ function _sectionWebSearch() {
   // ── Section: Models ───────────────────────────────────────────────────────
 
   function _sectionModels() {
+    // Build vision model options from the already-loaded _availableModels list.
+    // Falls back to a sensible default if models haven't loaded yet.
+    const currentVision = _v('vision_model', 'minicpm-v4.5:8b');
+    const visionOptions = _availableModels.length > 0
+      ? _availableModels.map(m =>
+          `<option value="${_esc(m.name)}" ${m.name === currentVision ? 'selected' : ''}>${_esc(m.name)}</option>`
+        ).join('')
+      : `<option value="${_esc(currentVision)}" selected>${_esc(currentVision)}</option>`;
+
     return `
       <h3 class="settings-pane-title">Models</h3>
+
+      <div class="settings-field">
+        <label class="settings-label">Vision model</label>
+        <select class="settings-select" data-key="vision_model">
+          ${visionOptions}
+        </select>
+        <p class="settings-hint">
+          Used when attaching images with <strong>Vision mode</strong>.
+          Must be a multimodal model available in Ollama
+          (e.g. <code>minicpm-v4.5:8b</code>, <code>gemma3:12b</code>, <code>llava</code>).
+          <code>minicpm-v4.5:8b</code> is already pulled and recommended for Bloomberg screenshots.
+        </p>
+      </div>
+
       <div class="settings-field">
         <label class="settings-label">Ollama response timeout (seconds)</label>
         <input class="settings-input" type="number" min="30" max="600"

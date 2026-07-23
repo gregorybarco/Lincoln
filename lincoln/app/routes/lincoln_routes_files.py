@@ -172,8 +172,15 @@ def upload_file():
 
     elif extension in _IMAGE_EXTENSIONS:
         mode         = request.args.get("mode", "ocr")
-        vision_model = request.args.get("vision_model", "")
+        vision_model = request.args.get("vision_model", "").strip()
         lang         = request.args.get("lang", "eng")
+
+        # If no vision_model was supplied in the request, fall back to the
+        # DB setting (default: minicpm-v4.5:8b). This means the frontend
+        # can call ?mode=vision without specifying a model and Lincoln will
+        # automatically use whichever vision model is configured.
+        if not vision_model and mode == "vision":
+            vision_model = get_setting("vision_model", "minicpm-v4.5:8b")
 
         from lincoln.lincoln_ocr_service import extract_image
         from lincoln.lincoln_configuration import OLLAMA_BASE_URL

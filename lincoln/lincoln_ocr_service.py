@@ -89,6 +89,26 @@ def extract_text_tesseract(
     except Exception as exc:
         return f"(OCR extraction failed: {exc})"
 
+def _fix_mojibake(text: str) -> str:
+    """
+    Fix common UTF-8 mojibake patterns produced when Ollama misencodes
+    Unicode punctuation characters from vision model responses.
+    """
+    replacements = {
+        "\xe2\x80\x99": "\u2019",  # right single quote '
+        "\xe2\x80\x98": "\u2018",  # left single quote '
+        "\xe2\x80\x9c": "\u201c",  # left double quote "
+        "\xe2\x80\x9d": "\u201d",  # right double quote "
+        "\xe2\x80\x94": "\u2014",  # em dash —
+        "\xe2\x80\x93": "\u2013",  # en dash –
+        "\xe2\x80\xa6": "\u2026",  # ellipsis …
+        "\xc2\xa9":     "\u00a9",  # copyright ©
+        "\xc2\xae":     "\u00ae",  # registered ®
+        "\xc2\xb0":     "\u00b0",  # degree °
+    }
+    for bad, good in replacements.items():
+        text = text.replace(bad, good)
+    return text
 
 def extract_text_vision_model(
     image_bytes: bytes,
@@ -135,7 +155,8 @@ def extract_text_vision_model(
         )
         response.raise_for_status()
         data = response.json()
-        return data.get("response", "").strip() or "(No response from vision model)"
+        text = data.get("response", "").strip() or "(No response from vision model)"
+        return _fix_mojibake(text)
 
     except requests.exceptions.ConnectionError:
         return f"(Vision model unavailable: cannot connect to Ollama at {ollama_url})"
