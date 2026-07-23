@@ -583,6 +583,18 @@ def send_message():
         ]
 
         # ── ReAct loop ────────────────────────────────────────────────────────
+# ── Emit ctx_update before loop so indicator appears immediately ──────
+        try:
+            from lincoln.lincoln_ollama_service import resolve_hardware_ceiling
+            _ctx_chars   = sum(len(m.get("content", "")) for m in history)
+            _ctx_tokens  = int((_ctx_chars / 4) * 1.10)
+            _ctx_ceiling = resolve_hardware_ceiling(model)
+            _ctx_pct     = round((_ctx_tokens / _ctx_ceiling) * 100, 1) if _ctx_ceiling > 0 else 0.0
+            yield f"data: {json.dumps({'type': 'ctx_update', 'tokens_used': _ctx_tokens, 'ceiling': _ctx_ceiling, 'percent': _ctx_pct})}\n\n"
+        except Exception:
+            pass  # ctx_update failure never blocks the stream
+
+        # ── ReAct loop ────────────────────────────────────────────────────────
         full_response_parts = []
 
         loop_gen = _react_loop(

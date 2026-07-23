@@ -343,7 +343,12 @@ const lincolnChat = (() => {
               sources = event.sources || [];
             }
 
+            if (event.type === 'ctx_update') {
+              _applyCtxUpdate(event);
+            }
+
             if (event.type === 'web_search') {
+              // Show transient indicator that web results were injected
               _showWebSearchIndicator(assistantEl, event.result_count || 0);
             }
 
@@ -351,7 +356,7 @@ const lincolnChat = (() => {
               _showBanCheckWarning(assistantEl, event.violations);
             }
 
-            if (event.type === 'tool_approval_required') {
+            if (event.type === 'approval_required') {
               cursor.remove();
               _showApprovalCard(assistantEl, event);
             }
@@ -579,6 +584,31 @@ const lincolnChat = (() => {
   }
 
   // ── Web search indicator ──────────────────────────────────────────────────
+
+function _applyCtxUpdate(data) {
+    const indicator = document.getElementById('ctxIndicator');
+    const tokUsed   = document.getElementById('ctxTokensUsed');
+    const ceiling   = document.getElementById('ctxCeiling');
+    const pct       = document.getElementById('ctxPercent');
+    const bar       = document.getElementById('ctxBar');
+    if (!indicator) return;
+
+    if (tokUsed) tokUsed.textContent = (data.tokens_used || 0).toLocaleString();
+    if (ceiling) ceiling.textContent = (data.ceiling || 0).toLocaleString();
+
+    const p = data.percent || 0;
+    if (pct) {
+      pct.textContent = p.toFixed(1) + '%';
+      pct.className   = 'ctx-percent' + (p >= 90 ? ' ctx-danger' : p >= 75 ? ' ctx-warn' : '');
+    }
+    if (bar) {
+      bar.style.width = Math.min(p, 100) + '%';
+      bar.className   = 'ctx-bar' + (p >= 90 ? ' ctx-bar-danger' : p >= 75 ? ' ctx-bar-warn' : '');
+    }
+    indicator.style.display  = 'flex';
+    indicator.style.background = '#e8e7e3';
+    indicator.style.border     = '0.5px solid rgba(0,0,0,0.14)';
+  }
 
   function _showWebSearchIndicator(messageEl, resultCount) {
     const body = messageEl.querySelector('.message-body');
