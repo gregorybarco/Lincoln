@@ -39,7 +39,16 @@ from lincoln.lincoln_configuration import OLLAMA_BASE_URL, OLLAMA_VRAM_GB
 # Reserve this fraction of the context window for the model's output.
 # Without headroom, a window sized to fit the input leaves no room for a
 # long code response, causing silent mid-stream truncation.
-_RESPONSE_HEADROOM = 0.20  # 20% of window reserved for output
+# Original value was 0.20 (20%) -- sufficient for single-turn chat but
+# too small for agentic ReAct sessions where tool results accumulate
+# across iterations and the model needs space to synthesize everything.
+# 0.40 (40%) on RTX 5060 Ti 16GB + Qwen 9B (~5.5GB weights) is safe --
+# 10.5GB remains for KV cache.
+_RESPONSE_HEADROOM = 0.40  # 40% reserved for output (was 0.20)
+
+# Hard floor: always reserve at least this many tokens for model output
+# regardless of input size. Prevents cutoff on long agentic sessions.
+_MIN_OUTPUT_TOKENS = 2048
 
 
 # ── Thinking-mode detection ───────────────────────────────────────────────────
@@ -184,18 +193,27 @@ def resolve_num_ctx_for_request(model: str, messages: list[dict]) -> int:
         )
         return hardware_max
 
-    # Add headroom so the output has room to breathe
+    # Size window to fit input + headroom for output.
+    # Also enforce a hard minimum output reservation (_MIN_OUTPUT_TOKENS)
+    # so long agentic sessions with many tool results never starve the
+    # model of output space at synthesis time.
     tokens_with_headroom = int(estimated_tokens / (1.0 - _RESPONSE_HEADROOM))
 
+    # Enforce minimum output floor: if headroom alone is less than
+    # _MIN_OUTPUT_TOKENS, expand the window to guarantee the floor.
+    min_window_for_floor = estimated_tokens + _MIN_OUTPUT_TOKENS
+    tokens_needed = max(tokens_with_headroom, min_window_for_floor)
+
     window = 2048
-    while window < tokens_with_headroom:
+    while window < tokens_needed:
         window *= 2
 
     final = min(window, hardware_max)
+    output_reserved = final - estimated_tokens
     print(
         f"[Lincoln] num_ctx -- input_est={estimated_tokens} "
-        f"+ headroom -> need={tokens_with_headroom} "
-        f"-> window={final} (ceiling={hardware_max})"
+        f"+ headroom({int(_RESPONSE_HEADROOM*100)}%) + floor({_MIN_OUTPUT_TOKENS}) "
+        f"-> window={final} output_reserved={output_reserved} (ceiling={hardware_max})"
     )
     return final
 

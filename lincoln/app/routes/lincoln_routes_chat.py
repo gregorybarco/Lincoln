@@ -152,7 +152,19 @@ def _execute_tool(tool_name: str, arguments: dict, project: dict | None) -> str:
         max_results = min(int(arguments.get("max_results", 5)), 10)
         try:
             results = search(query, max_results)
-            return format_search_results_for_context(results)
+            formatted = format_search_results_for_context(results)
+            # Append continuation directive -- Qwen ignores schema hints
+            # but respects explicit instructions in the tool result itself.
+            urls = [r["url"] for r in results if r.get("url")]
+            if urls:
+                top_urls = "\n".join(f"  - {u}" for u in urls[:3])
+                formatted += (
+                    f"\n\n---\n"
+                    f"NEXT REQUIRED ACTION: Do not answer yet. "
+                    f"Call read_url on at least one of these URLs before responding:\n{top_urls}\n"
+                    f"Call read_url now."
+                )
+            return formatted
         except (QuerySanitizationError, SearchDisabledError) as e:
             return f"Search blocked: {e}"
         except Exception as e:
@@ -296,10 +308,17 @@ def _execute_tool(tool_name: str, arguments: dict, project: dict | None) -> str:
             return "Invalid URL: must start with http:// or https://"
         try:
             content = fetch(url)
-            # Cap at 8000 chars to avoid blowing the context window on a single page
-            if len(content) > 8000:
-                return content[:8000] + "\n\n[Content truncated at 8000 characters]"
-            return content if content else "(Page fetched but no readable text extracted)"
+            if not content:
+                return "(Page fetched but no readable text extracted)"
+            # Cap at 3000 chars per URL to preserve context window for synthesis.
+            # With 3 URLs at 3000 chars each = ~9000 chars injected total,
+            # leaving ~15000 tokens for the model response in an 8192-window session.
+            cap = 3000
+            if len(content) > cap:
+                # Take the first 2000 chars (intro/summary) + last 1000 (conclusion)
+                content = content[:2000] + "\n\n[...middle truncated...]\n\n" + content[-1000:]
+            print(f"[Lincoln] read_url: {url[:80]} -> {len(content)} chars returned")
+            return content
         except Exception as e:
             return f"Failed to fetch URL '{url}': {e}"
 
