@@ -198,10 +198,13 @@ Ask the user what to build next at the start of the next session.
 
 1. Call `recent_chats` (n=8 minimum).
 2. Read all `userMemories` entries in full.
-3. Read this document if it is in the project files.
-4. Read `lincoln-shared-memory.md` if available.
-5. Cross-check — identify anything in recent chats NOT yet captured.
-6. Confirm to user: "Reviewed memory entries 1-N, recent chats, handoff doc. Pending queue is empty. What should we build next?"
+3. Fetch the three CLAUDE-FILES URLs from GitHub in this order:
+   - https://raw.githubusercontent.com/gregorybarco/Lincoln/main/build_decisions/CLAUDE-FILES/Lincoln-file-tree.md
+   - https://raw.githubusercontent.com/gregorybarco/Lincoln/main/build_decisions/CLAUDE-FILES/lincoln-master-handoff.md
+   - https://raw.githubusercontent.com/gregorybarco/Lincoln/main/build_decisions/CLAUDE-FILES/lincoln-shared-memory.md
+4. Fetch any specific source files needed for the task using URLs from the file tree.
+5. Cross-check — identify anything in recent chats NOT yet captured in shared memory.
+6. Confirm to user: "Reviewed memory, recent chats, handoff doc, shared memory. Pending queue is [X]. What should we build next?"
 7. Only THEN begin any build or patch work.
 
 If Claude skips this, prompt: **"Check recent chats and memory first."**
