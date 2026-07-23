@@ -2355,3 +2355,9 @@ body { font-family: var(--ui-font); }
     .ctx-bar.ctx-bar-danger {
         background: var(--text-danger, #ef4444);
     }
+
+/* P3 contrast fix — indicator must be visually distinct from topbar */
+.ctx-indicator {
+    background: var(--bg-hover) !important;
+    border: 0.5px solid var(--border-strong) !important;
+}

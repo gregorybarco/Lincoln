@@ -1127,6 +1127,8 @@ const lincolnChat = (() => {
         bar.className   = 'ctx-bar' + (p >= 90 ? ' ctx-bar-danger' : p >= 75 ? ' ctx-bar-warn' : '');
       }
       indicator.style.display = 'flex';
+      indicator.style.background = '#e8e7e3';
+      indicator.style.border = '0.5px solid rgba(0,0,0,0.14)';
     } catch (_) { /* silently ignore — indicator is non-critical */ }
   }
  
