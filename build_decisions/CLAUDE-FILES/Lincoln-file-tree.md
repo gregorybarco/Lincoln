@@ -7,6 +7,7 @@ Last updated: 2026-07-23
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/build_decisions/CLAUDE-FILES/Lincoln-file-tree.md
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/build_decisions/CLAUDE-FILES/lincoln-master-handoff.md
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/build_decisions/CLAUDE-FILES/lincoln-shared-memory.md
+https://raw.githubusercontent.com/gregorybarco/Lincoln/main/build_decisions/CLAUDE-FILES/lincoln-roadmap.md
 
 ## CORE ROUTES
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/lincoln/app/routes/lincoln_routes_chat.py

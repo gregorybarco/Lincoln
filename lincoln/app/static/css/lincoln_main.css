@@ -2361,3 +2361,43 @@ body { font-family: var(--ui-font); }
     background: var(--bg-hover) !important;
     border: 0.5px solid var(--border-strong) !important;
 }
+
+/* ── Selection toolbar clear button fix ─────────────────────────────────── */
+.selection-toolbar .selection-btn:has(.ti-x) {
+    min-width: 28px;
+    width: 28px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    overflow: visible;
+}
+
+.selection-toolbar .selection-btn .ti-x {
+    font-size: 13px;
+    line-height: 1;
+    display: block;
+}
+
+/* ── Sidebar drag-to-resize handle ──────────────────────────────────────── */
+#sidebar {
+    position: relative;
+}
+
+.sidebar-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 100;
+    background: transparent;
+    transition: background 0.15s;
+}
+
+    .sidebar-resize-handle:hover,
+    .sidebar-resize-handle:active {
+        background: var(--border, rgba(0,0,0,0.15));
+    }

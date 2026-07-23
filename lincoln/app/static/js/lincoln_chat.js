@@ -206,6 +206,7 @@ const lincolnChat = (() => {
     } catch (err) {
       console.error('Failed to load session:', err);
     }
+    _updateCtxIndicator();
   }
 
   function setActiveProject(projectId, project) {
@@ -333,12 +334,13 @@ const lincolnChat = (() => {
                 }
               } else {
                 fullText += content;
-                bubbleEl.textContent = fullText;
+                bubbleEl.innerHTML = (typeof marked !== 'undefined')
+                  ? marked.parse(fullText)
+                  : fullText.replace(/\n/g, '<br>');
                 bubbleEl.appendChild(cursor);
                 _scrollToBottom();
               }
             }
-
             if (event.type === 'sources') {
               sources = event.sources || [];
             }
@@ -484,7 +486,9 @@ const lincolnChat = (() => {
 
             if (event.type === 'token' && bubbleEl) {
               fullText += event.content;
-              bubbleEl.textContent = fullText;
+              bubbleEl.innerHTML = (typeof marked !== 'undefined')
+                ? marked.parse(fullText)
+                : fullText.replace(/\n/g, '<br>');
               bubbleEl.appendChild(cursor);
               _scrollToBottom();
             }
@@ -1026,6 +1030,7 @@ function _applyCtxUpdate(data) {
     const home = document.getElementById('projectHome');
     if (home) home.remove();
     _sessionId = null;
+    _hideCtxIndicator();
   }
 
   // ── Global Escape handler ─────────────────────────────────────────────────
@@ -1116,8 +1121,8 @@ function _applyCtxUpdate(data) {
     return slug + ext;
   }
 
-  function showWelcome() { _sessionId = null; _clearMessages(); }
-  function showProjectHome(project) { _sessionId = null; _activeProject = project; _clearMessages(); }
+  function showWelcome() { _sessionId = null; _clearMessages(); _hideCtxIndicator(); }
+  function showProjectHome(project) { _sessionId = null; _activeProject = project; _clearMessages(); _hideCtxIndicator(); }
 
   document.addEventListener('click', (e) => {
     const pill = document.getElementById('thinkModePill');

@@ -39,6 +39,7 @@ const lincolnSidebar = (() => {
     await loadHistory();
     await loadProjects();
     _setupKeyboardShortcuts();
+    _setupSidebarResize();
   }
 
   async function _loadShowProjectChats() {
@@ -1133,6 +1134,57 @@ function _sessionHTML(s, idx) {
   }
 
   // ── Utilities ─────────────────────────────────────────────────────────────
+
+  // ── Sidebar drag-to-resize ────────────────────────────────────────────────
+
+  function _setupSidebarResize() {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+
+    // Create drag handle and inject it
+    const handle = document.createElement('div');
+    handle.id        = 'sidebarResizeHandle';
+    handle.className = 'sidebar-resize-handle';
+    handle.title     = 'Drag to resize sidebar';
+    sidebar.appendChild(handle);
+
+    let dragging   = false;
+    let startX     = 0;
+    let startWidth = 0;
+    const MIN_W    = 180;
+    const MAX_W    = 520;
+
+    handle.addEventListener('mousedown', (e) => {
+      dragging   = true;
+      startX     = e.clientX;
+      startWidth = sidebar.getBoundingClientRect().width;
+      document.body.style.cursor      = 'col-resize';
+      document.body.style.userSelect  = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const delta    = e.clientX - startX;
+      const newWidth = Math.min(MAX_W, Math.max(MIN_W, startWidth + delta));
+      sidebar.style.width = newWidth + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.style.cursor     = '';
+      document.body.style.userSelect = '';
+      // Persist width to localStorage so it survives reload
+      try { localStorage.setItem('lincoln_sidebar_width', sidebar.style.width); } catch (_) {}
+    });
+
+    // Restore saved width on load
+    try {
+      const saved = localStorage.getItem('lincoln_sidebar_width');
+      if (saved) sidebar.style.width = saved;
+    } catch (_) {}
+  }
 
   function _esc(str) {
     const d = document.createElement('div');
