@@ -582,7 +582,6 @@ def send_message():
             {"role": "user", "content": llm_text},
         ]
 
-        # ── ReAct loop ────────────────────────────────────────────────────────
         # ── Emit ctx_update before loop so indicator appears immediately ──────
         try:
             from lincoln.lincoln_ollama_service import resolve_hardware_ceiling
@@ -803,17 +802,7 @@ def resolve_tool():
         },
     )
 
-# ══════════════════════════════════════════════════════════════════════════════
-# P3 — Context window usage endpoint
-# APPEND this to the bottom of lincoln_routes_chat.py.
-# RESTART REQUIRED after saving.
-#
-# Notes:
-#   - LLM_MODEL is already imported at the top of this file from
-#     lincoln.lincoln_configuration — do NOT import it again.
-#   - get_session_messages is already imported from lincoln.lincoln_database.
-#   - resolve_hardware_ceiling is in lincoln_ollama_service.
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Context window usage endpoint (P3) ────────────────────────────────────────
 
 @chat_blueprint.route("/api/chat/context_usage", methods=["GET"])
 def context_usage():
