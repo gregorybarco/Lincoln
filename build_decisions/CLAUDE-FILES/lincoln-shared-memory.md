@@ -57,7 +57,8 @@ Items that remain aspirational / roadmap only (NOT in the active build queue):
 - QLoRA fine-tuning on RTX 5060 Ti 16GB
 - Bloomberg/Schwab terminal data extraction pipeline
 - Agentic web browsing (Playwright/Selenium via WSL)
-
+- Duplicate version badge in topbar (Q5) — cosmetic, low priority
+- lincoln_routes_chat.py comment hygiene (Q6) — cosmetic, low priority
 ---
 
 ## 3. ACTIVE FILE LOCKS
