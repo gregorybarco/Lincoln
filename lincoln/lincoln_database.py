@@ -814,6 +814,24 @@ def save_memory_entry(
         connection.commit()
 
 
+def update_memory_entry(
+    entry_id: int,
+    content:  str,
+    tag:      str | None = None,
+):
+    """Edit an existing memory entry's content/tag (T1-F manual edit)."""
+    with _get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE lincoln_memory_entries
+            SET content = ?, tag = ?
+            WHERE id = ?
+            """,
+            (content, tag, entry_id),
+        )
+        connection.commit()
+
+
 def get_recent_memory_entries(limit: int = 5) -> list[dict]:
     with _get_connection() as connection:
         rows = connection.execute(

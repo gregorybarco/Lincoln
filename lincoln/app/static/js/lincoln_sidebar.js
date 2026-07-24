@@ -31,6 +31,8 @@ const lincolnSidebar = (() => {
   let _historySelected  = new Set();  // selected session ids
   let _lastClickedIdx   = null;       // for shift+click range
   let _memorySelected   = new Set();  // selected memory entry ids
+  let _memoryEntriesById = {};        // cache of last-rendered memory entries, keyed by id (T1-F)
+  const _MEMORY_TAGS = ['preference', 'decision', 'constraint', 'fact', 'code_style', 'persona'];
 
   // ── Init ──────────────────────────────────────────────────────────────────
 
@@ -380,6 +382,8 @@ function _sessionHTML(s, idx) {
     const list = document.getElementById('memoryList');
     if (!list) return;
 
+    _memoryEntriesById = {};
+
     if (!entries.length) {
       list.innerHTML = `
         <div class="sidebar-empty-state">
@@ -387,10 +391,12 @@ function _sessionHTML(s, idx) {
           Use the <strong>Save session</strong> button after a chat to create one.
         </div>`;
       _renderMemoryToolbar(0, 0);
+      _renderAddMemoryButton();
       return;
     }
 
     list.innerHTML = entries.map((entry, idx) => {
+      _memoryEntriesById[entry.id] = entry;
       const checked = _memorySelected.has(entry.id) ? 'checked' : '';
       const tag     = entry.tag ? `<span class="memory-tag">${_esc(entry.tag)}</span>` : '';
       const project = entry.project_display_name
@@ -410,7 +416,8 @@ function _sessionHTML(s, idx) {
               <span class="memory-date">${_date(entry.created_at)}</span>
               ${tag}${project}
             </div>
-            <div class="memory-text">${_esc(entry.content)}</div>
+            <div class="memory-text" title="Click to edit"
+                 onclick="event.stopPropagation(); lincolnSidebar.editMemoryEntry(${entry.id})">${_esc(entry.content)}</div>
           </div>
           <button class="history-delete-btn" title="Delete memory"
                   onclick="event.stopPropagation(); lincolnSidebar.deleteMemoryEntry(${entry.id})">
@@ -421,6 +428,7 @@ function _sessionHTML(s, idx) {
     }).join('');
 
     _renderMemoryToolbar(entries.length, _memorySelected.size);
+    _renderAddMemoryButton();
   }
 
   function _renderMemoryToolbar(total, selectedCount) {
@@ -509,6 +517,149 @@ function _sessionHTML(s, idx) {
       await loadMemory();
     } catch (err) {
       console.error('Clear all memory error:', err);
+    }
+  }
+
+  // ── Memory panel: inline edit (T1-F) ────────────────────────────────────────
+
+  function editMemoryEntry(entryId) {
+    const entry = _memoryEntriesById[entryId];
+    const el    = document.getElementById(`memoryEntry_${entryId}`);
+    if (!entry || !el) return;
+
+    const tagOptions = _MEMORY_TAGS.map(t =>
+      `<option value="${t}" ${entry.tag === t ? 'selected' : ''}>${t}</option>`
+    ).join('');
+
+    el.querySelector('.memory-content').innerHTML = `
+      <div class="memory-edit-form">
+        <textarea class="memory-edit-textarea" id="memoryEditText_${entryId}">${_esc(entry.content)}</textarea>
+        <select class="memory-edit-tag" id="memoryEditTag_${entryId}">${tagOptions}</select>
+        <div class="memory-edit-actions">
+          <button class="selection-btn" id="memoryEditSaveBtn_${entryId}" onclick="event.stopPropagation(); lincolnSidebar.saveMemoryEdit(${entryId})">Save</button>
+          <button class="selection-btn" onclick="event.stopPropagation(); lincolnSidebar.cancelMemoryEdit(${entryId})">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    const editTextEl = document.getElementById(`memoryEditText_${entryId}`);
+    const editSaveBtn = document.getElementById(`memoryEditSaveBtn_${entryId}`);
+    const _syncEditSaveState = () => { editSaveBtn.disabled = !editTextEl.value.trim(); };
+    editTextEl.addEventListener('input', _syncEditSaveState);
+    _syncEditSaveState();
+  }
+
+  function cancelMemoryEdit(entryId) {
+    _renderSingleMemoryEntry(entryId);
+  }
+
+  async function saveMemoryEdit(entryId) {
+    const textEl = document.getElementById(`memoryEditText_${entryId}`);
+    const tagEl  = document.getElementById(`memoryEditTag_${entryId}`);
+    if (!textEl || !tagEl) return;
+
+    const content = textEl.value.trim();
+    const tag     = tagEl.value;
+    if (!content) return;
+
+    try {
+      await fetch(`/api/history/memory/${entryId}`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ content, tag }),
+      });
+      _memoryEntriesById[entryId] = { ..._memoryEntriesById[entryId], content, tag };
+      _renderSingleMemoryEntry(entryId);
+    } catch (err) {
+      console.error('Save memory edit error:', err);
+    }
+  }
+
+  function _renderSingleMemoryEntry(entryId) {
+    const entry = _memoryEntriesById[entryId];
+    const el    = document.getElementById(`memoryEntry_${entryId}`);
+    if (!entry || !el) return;
+
+    const tag     = entry.tag ? `<span class="memory-tag">${_esc(entry.tag)}</span>` : '';
+    const project = entry.project_display_name
+      ? `<span class="memory-project">${_esc(entry.project_display_name)}</span>` : '';
+
+    el.querySelector('.memory-content').innerHTML = `
+      <div class="memory-meta">
+        <span class="memory-date">${_date(entry.created_at)}</span>
+        ${tag}${project}
+      </div>
+      <div class="memory-text" title="Click to edit"
+           onclick="event.stopPropagation(); lincolnSidebar.editMemoryEntry(${entryId})">${_esc(entry.content)}</div>
+    `;
+  }
+
+  // ── Memory panel: manual add (T1-F) ─────────────────────────────────────────
+
+  function _renderAddMemoryButton() {
+    if (document.getElementById('addMemoryBtn')) return;
+    const memSection = document.getElementById('memoryView');
+    if (!memSection) return;
+
+    const btn = document.createElement('button');
+    btn.id        = 'addMemoryBtn';
+    btn.className = 'selection-btn';
+    btn.innerHTML = '<i class="ti ti-plus"></i> Add memory';
+    btn.onclick   = () => lincolnSidebar.openAddMemoryForm();
+    memSection.prepend(btn);
+  }
+
+  function openAddMemoryForm() {
+    if (document.getElementById('addMemoryForm')) return;
+
+    const tagOptions = _MEMORY_TAGS.map(t => `<option value="${t}">${t}</option>`).join('');
+
+    const form = document.createElement('div');
+    form.id        = 'addMemoryForm';
+    form.className = 'memory-edit-form';
+    form.innerHTML = `
+      <textarea class="memory-edit-textarea" id="newMemoryText" placeholder="New memory entry..."></textarea>
+      <select class="memory-edit-tag" id="newMemoryTag">${tagOptions}</select>
+      <div class="memory-edit-actions">
+        <button class="selection-btn" onclick="lincolnSidebar.saveNewMemory()">Save</button>
+        <button class="selection-btn" onclick="lincolnSidebar.closeAddMemoryForm()">Cancel</button>
+      </div>
+    `;
+
+    const memSection = document.getElementById('memoryView');
+    const addBtn     = document.getElementById('addMemoryBtn');
+    if (memSection) memSection.insertBefore(form, addBtn ? addBtn.nextSibling : memSection.firstChild);
+
+    const newTextEl  = document.getElementById('newMemoryText');
+    const newSaveBtn = form.querySelector('.memory-edit-actions .selection-btn');
+    const _syncAddSaveState = () => { newSaveBtn.disabled = !newTextEl.value.trim(); };
+    newTextEl.addEventListener('input', _syncAddSaveState);
+    _syncAddSaveState();
+  }
+
+  function closeAddMemoryForm() {
+    document.getElementById('addMemoryForm')?.remove();
+  }
+
+  async function saveNewMemory() {
+    const textEl = document.getElementById('newMemoryText');
+    const tagEl  = document.getElementById('newMemoryTag');
+    if (!textEl || !tagEl) return;
+
+    const content = textEl.value.trim();
+    const tag     = tagEl.value;
+    if (!content) return;
+
+    try {
+      await fetch('/api/history/memory', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ content, tag, project_id: _activeProjectId || null }),
+      });
+      closeAddMemoryForm();
+      await loadMemory();
+    } catch (err) {
+      console.error('Save new memory error:', err);
     }
   }
 
@@ -1248,6 +1399,12 @@ function _sessionHTML(s, idx) {
     _deleteSelectedMemory,
     _selectAllHistory,
     exitProject,
+    editMemoryEntry,
+    cancelMemoryEdit,
+    saveMemoryEdit,
+    openAddMemoryForm,
+    closeAddMemoryForm,
+    saveNewMemory,
   };
 
 })();

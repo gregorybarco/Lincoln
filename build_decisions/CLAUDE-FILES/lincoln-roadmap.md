@@ -96,8 +96,8 @@ existing tags (`preference`, `decision`, `constraint`, `fact`, `code_style`, `pe
 only. All writes go through `save_memory_entry()`, never raw SQL (per F4).
 **Files likely touched:** `lincoln_routes_history.py` (backend), `lincoln_sidebar.js`
 (frontend memory panel)
-**Status:** Not started. Logged 2026-07-23, added to roadmap same day after
-being caught missing on first mention.
+**Status:** ✅ Complete — deployed and verified 2026-07-24. Moved to
+lincoln-shared-memory.md §1 and lincoln-master-handoff.md §6/§10.
 
 ---
 

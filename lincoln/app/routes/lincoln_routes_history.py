@@ -38,6 +38,7 @@ from lincoln.lincoln_database import (
     get_recent_memory_entries,
     get_session_messages,
     save_memory_entry,
+    update_memory_entry,
     delete_memory_entry,
     delete_memory_entries_bulk,
     delete_all_memory_entries,
@@ -45,6 +46,11 @@ from lincoln.lincoln_database import (
 )
 
 history_blueprint = Blueprint("history", __name__)
+
+# Locked tag set for T1-F manual memory edit/append (UI dropdown must match)
+_ALLOWED_MEMORY_TAGS = {
+    "preference", "decision", "constraint", "fact", "code_style", "persona",
+}
 
 
 def _get_history_limit() -> int:
@@ -159,6 +165,65 @@ def list_all_memory():
     project_id = request.args.get("project_id", type=int)
     entries    = get_all_memory_entries(project_id=project_id)
     return jsonify(entries)
+
+
+@history_blueprint.route("/api/history/memory", methods=["POST"])
+def add_memory_entry():
+    """
+    Manually append a new memory entry from the Memory panel (T1-F).
+    Body: { "content": "...", "tag": "...", "project_id": (optional int) }
+    Distinct from POST /api/history/context, which hardcodes tag=session_summary
+    for the auto-save flow.
+    """
+    data       = request.get_json(silent=True) or {}
+    content    = (data.get("content") or "").strip()
+    tag        = data.get("tag")
+    project_id = data.get("project_id")
+
+    if not content:
+        return jsonify({"status": "error", "message": "content is required"}), 400
+
+    if tag not in _ALLOWED_MEMORY_TAGS:
+        return jsonify({
+            "status":  "error",
+            "message": f"tag must be one of: {', '.join(sorted(_ALLOWED_MEMORY_TAGS))}",
+        }), 400
+
+    try:
+        save_memory_entry(
+            content    = content,
+            project_id = project_id if isinstance(project_id, int) else None,
+            tag        = tag,
+        )
+        return jsonify({"status": "ok"}), 201
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@history_blueprint.route("/api/history/memory/<int:entry_id>", methods=["PUT"])
+def edit_memory_entry(entry_id: int):
+    """
+    Edit an existing memory entry's content/tag from the Memory panel (T1-F).
+    Body: { "content": "...", "tag": "..." }
+    """
+    data    = request.get_json(silent=True) or {}
+    content = (data.get("content") or "").strip()
+    tag     = data.get("tag")
+
+    if not content:
+        return jsonify({"status": "error", "message": "content is required"}), 400
+
+    if tag not in _ALLOWED_MEMORY_TAGS:
+        return jsonify({
+            "status":  "error",
+            "message": f"tag must be one of: {', '.join(sorted(_ALLOWED_MEMORY_TAGS))}",
+        }), 400
+
+    try:
+        update_memory_entry(entry_id, content=content, tag=tag)
+        return jsonify({"status": "ok"}), 200
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
 
 
 @history_blueprint.route("/api/history/memory/<int:entry_id>", methods=["DELETE"])

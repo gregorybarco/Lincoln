@@ -6,7 +6,7 @@
 
 ---
 
-## 1. CONFIRMED LIVE STATE (as of 2026-07-23)
+## 1. CONFIRMED LIVE STATE (as of 2026-07-24)
 
 Everything below is confirmed built, deployed locally to `B:\Homebrewed_AI\Lincoln`, and pushed to `github.com/gregorybarco/Lincoln` on `main` branch. Reference commit: `dcab251` ("0.7.4 - Fixed token showing- settings- web agent search").
 
@@ -41,12 +41,12 @@ Everything below is confirmed built, deployed locally to `B:\Homebrewed_AI\Linco
 | System prompt 4 active blocks | ✅ Live | `lincoln_database.py` (seeded) | Lincoln persona, Life cycle, Memory Save Behavior, Tool Chaining Mandate |
 | Four active DB system prompt blocks | ✅ Live | `lincoln_database.py` | Scope=global, persistent, survives restarts |
 | Ban list checker | ✅ Live | `lincoln_ban_list_checker.py`, `lincoln_routes_chat.py` | Fires warning banner on OptionsPricing generated code |
-| Version badge single-instance fix | ✅ Live | lincoln_index.html | Removed 2 duplicate sidebar-logo divs; one span with id="sidebarVersionDisplay" remains |
+| Memory edit/append UI (T1-F) | ✅ Live | `lincoln_database.py`, `lincoln_routes_history.py`, `lincoln_sidebar.js`, `lincoln_main.css` | Inline click-to-edit on entries, "Add memory" button for manual append, tag dropdown locked to 6 tags, empty-save disables Save button. New: `update_memory_entry()`, `PUT/POST /api/history/memory`. Multi-select checkbox + bulk delete is a separate, pre-existing feature (predates T1-F) — always available, not toggled by this work. || Version badge single-instance fix | ✅ Live | lincoln_index.html | Removed 2 duplicate sidebar-logo divs; one span with id="sidebarVersionDisplay" remains |
 | Routes comment hygiene cleanup | ✅ Live | lincoln_routes_chat.py | Removed duplicate "ReAct loop" header (line 585) and stale P3 patch-instruction banner |
 
 ---
 
-## 2. CONFIRMED PENDING (nothing as of 2026-07-23)
+## 2. CONFIRMED PENDING (nothing as of 2026-07-24)
 
 **The P1–P4 queue is fully complete.** There is no confirmed pending feature queue at this time. The next session should ask the user what to build next.
 
@@ -147,6 +147,7 @@ Decisions with rationale. Both instances treat these as authoritative unless exp
 | D13 | nomic-embed-text fixed as embed model | Not switchable from UI. Only the LLM model is switchable per session. | Pre-v0.6.0 | Yes, with re-index |
 | D14 | minicpm-v4.5:8b as default vision_model DB setting | Pulled and confirmed working standalone via Ollama. Used for image/chart inputs. | 2026-07-23 | Yes |
 | D15 | KaTeX only on explicit delimiters ($$, \[..\], \(..\)) | Bare $ caused financial text like "$200 billion" to be parsed as LaTeX. Critical for quant finance use case. | 2026-07-22 | Yes |
+| D16 | Multi-select (checkbox + bulk delete) is a baseline pattern for all sidebar list panels, not a per-feature toggle | Established in the History panel first; carried forward as the default when the Memory panel was built. Any future sidebar list-type panel should include multi-select + bulk delete by default unless there's a specific reason not to. | 2026-07-24 | Yes, with care |
 
 ---
 
@@ -165,6 +166,7 @@ Shared vocabulary — if either instance uses these terms, they mean exactly thi
 | canvas | The code block management area in the right panel — run buttons, output panel |
 | P1/P2/P3/P4 | The four priority items defined in LINCOLN_MASTER_HANDOFF.md. All four are now complete. |
 | hard reload | Ctrl+Shift+R — required after JS/CSS changes to bypass browser cache |
+| multi-select pattern | The checkbox + bulk-select-toolbar + bulk-delete convention (see D16). Baseline for sidebar list panels — currently live in History and Memory panels. |
 | full restart | Ctrl+C + relaunch `lincoln_start.bat` — required after Python file changes |
 | the stale duplicate | The now-deleted `lincoln/lincoln_routes_settings.py` at the wrong path (not to be confused with the correct `lincoln/app/routes/lincoln_routes_settings.py`) |
 

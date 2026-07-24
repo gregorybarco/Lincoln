@@ -1,5 +1,5 @@
 # LINCOLN AI — MASTER HANDOFF DOCUMENT
-**Last Updated:** 2026-07-23 (P3b deployed, P1-P4 all complete)
+**Last Updated:** 2026-07-24 (T1-F Memory Edit/Append UI deployed and verified)
 **Version:** v0.7.4 (codename: Navigator)
 **Project Path:** `B:\Homebrewed_AI\Lincoln`
 **GitHub:** https://github.com/gregorybarco/Lincoln (branch: main)
@@ -167,11 +167,20 @@ lincoln/app/static/js/
 3. Memory Save Behavior
 4. Tool Chaining Mandate
 
+### Memory Edit/Append UI (T1-F — COMPLETE, 2026-07-24)
+- Click-to-edit on any memory entry's text in the sidebar panel — swaps to textarea + tag dropdown + Save/Cancel.
+- "Add memory" button for manual append, same form pattern.
+- Tag dropdown locked to the six existing tags: `preference`, `decision`, `constraint`, `fact`, `code_style`, `persona`.
+- Save button disables when textarea is empty (visible empty-save guard).
+- Backend: `update_memory_entry()` in `lincoln_database.py`; `PUT /api/history/memory/<id>` and `POST /api/history/memory` in `lincoln_routes_history.py`, distinct from the existing `POST /api/history/context` auto-save route.
+- Not a ReAct tool — pure UI CRUD, no approval card.
+- Multi-select checkboxes + bulk delete predate T1-F and remain a permanently available feature, unrelated to this build — both live in the same panel by design.
+
 ---
 
 ## 7. PENDING ITEMS
 
-**Nothing in the confirmed queue.** P1, P2, P3, P3b, and P4 are all complete.
+**Nothing in the confirmed queue.** P1–P4 and T1-F are all complete.
 
 Ask the user what to build next at the start of the next session.
 
@@ -225,5 +234,5 @@ If Claude skips this, prompt: **"Check recent chats and memory first."**
 | 2026-07-23 | Settings patch went to wrong file | Stale duplicate at `lincoln/lincoln_routes_settings.py` | Stale copy deleted; correct path is `lincoln/app/routes/lincoln_routes_settings.py` |
 | 2026-07-22 | KaTeX mangles financial text | Bare `$` treated as math delimiter | Removed bare `$` from KaTeX config |
 | 2026-07-22 | Date in web search queries stale | Qwen doesn't know current date | `date.today().isoformat()` injected in system prompt |
-| 2026-07-23 | Duplicate v0.7.0 badge shown 3x in topbar | 3 copies of the same help-button+version-span div in sidebar-logo, 2 sharing id="sidebarVersionDisplay" | Removed 2 duplicate divs, kept the one with the id |
+| 2026-07-24 | No manual memory edit/append (T1-F) | Feature gap, not a bug — memory panel was view+delete only | Added `update_memory_entry()`, `PUT`/`POST /api/history/memory` routes, inline edit + add UI in `lincoln_sidebar.js` || 2026-07-23 | Duplicate v0.7.0 badge shown 3x in topbar | 3 copies of the same help-button+version-span div in sidebar-logo, 2 sharing id="sidebarVersionDisplay" | Removed 2 duplicate divs, kept the one with the id |
 | 2026-07-23 | Dead comment clutter in lincoln_routes_chat.py | Leftover duplicate header + stale "APPEND/RESTART" patch-instruction banner from earlier edits | Both removed; confirmed non-load-bearing |
