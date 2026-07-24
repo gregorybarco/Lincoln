@@ -28,12 +28,15 @@ Flask UI (localhost:5000)
 - RAM: ~30GB usable
 - Ollama on B drive
 
-**Models currently in Ollama:**
-- `qwen3.5:9b` — default, all chat/agentic tasks (6.6GB)
-- `gemma4:12b` — available, not yet benchmarked for code (7.6GB)
-- `qwen2.5-coder:latest` — specialist code model (4.7GB)
-- `deepseek-coder:latest` — lightweight code model (776MB)
-- `minicpm-v4.5:8b` — vision/multimodal (6.1GB), **wired as of 2026-07-23**
+**Models currently in Ollama (benchmark status as of 2026-07-24):**
+- `qwen3.5:9b` — **default**, all chat/agentic/ReAct tasks (6.6GB, 63 tok/s, native tools ✅, thinking ✅)
+- `gemma4:12b` — **code routing target for T1-A**; outperforms qwen2.5-coder on tools, code quality, long-context (7.6GB, 43 tok/s, native tools ✅)
+- `danielsheep/gpt-oss-20b-Unsloth` — **T1-A speed candidate**; fastest in cohort, no thinking (12GB, 97 tok/s, native tools ✅)
+- `deepseek-r1:14b` — **benched**; tool call failure + 93% CPU at 32k context (8–13GB, see D24)
+- `qwen2.5-coder:latest` — **no role**; outputs tool calls as plain text, broken Python algorithm (4.7GB, see D26)
+- `deepseek-coder:latest` — **no role**; 400 error on tools, broken output, hangs at 32k (776MB, see D27)
+- `minicpm-v4.5:8b` — **vision only**, wired as of 2026-07-23 (6.1GB)
+- `llama3.2:1b` — network test only, no Lincoln role (1.3GB)
 - `nomic-embed-text` — fixed embed model, not switchable
 
 ---
@@ -153,6 +156,12 @@ lincoln/app/static/js/
 ### Context Window Sizing
 - `_RESPONSE_HEADROOM = 0.40`, `_MIN_OUTPUT_TOKENS = 2048`.
 - Per-request sizing — no hardcoded values, no user input.
+
+### Context Window VRAM Ceiling (D22 — COMPLETE)
+- `max_context_tokens` DB setting (default 16384), stepped range slider in Settings → Models.
+- `resolve_hardware_ceiling()` in `lincoln_ollama_service.py` capped by this value on every request.
+- Prevents cudaMalloc OOM when model's native max (e.g. 128k+) would exhaust VRAM.
+- Files: `lincoln_database.py`, `lincoln_ollama_service.py`, `lincoln_routes_settings.py`, `lincoln_settings.js`, `lincoln_main.css`.
 
 ### Settings Panel
 - 860px wide, left-nav tabbed, 10 sections.

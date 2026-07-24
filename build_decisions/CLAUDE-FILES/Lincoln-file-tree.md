@@ -1,7 +1,7 @@
 LINCOLN RAW FILE URLs
 Base: https://raw.githubusercontent.com/gregorybarco/Lincoln/main/
 Usage: paste any URL below into chat — Claude can fetch it directly.
-Last updated: 2026-07-23
+Last updated: 2026-07-24
 
 ## CLAUDE-FILES (shared instance layer — fetch these first every session)
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/build_decisions/CLAUDE-FILES/Lincoln-file-tree.md
@@ -61,6 +61,7 @@ https://raw.githubusercontent.com/gregorybarco/Lincoln/main/build_decisions/GIT_
 
 ## SCRIPTS
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/scripts/lincoln_shell.py
+https://raw.githubusercontent.com/gregorybarco/Lincoln/main/scripts/lincoln_model_eval.py
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/scripts/rag_indexer.py
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/scripts/rag_query.py
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/scripts/web_search.py

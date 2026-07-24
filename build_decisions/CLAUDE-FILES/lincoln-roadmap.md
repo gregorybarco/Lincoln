@@ -40,15 +40,18 @@ attempting Tier 2 or Tier 3.
 ### T1-A: Model Routing by Task Type
 **What:** Lincoln auto-selects the right model based on what it detects in the message.
 No more manual model pill switching.
-**Routing logic (proposed):**
-- Code generation / debugging → `qwen2.5-coder:latest`
-- Vision / chart / image inputs → `minicpm-v4.5:8b`
-- Lightweight fast tasks → `deepseek-coder:latest`
-- Default conversation / research / agentic → `qwen3.5:9b`
+**Routing matrix (benchmark-validated 2026-07-24 — see D29):**
+- Default / agentic / ReAct / thinking → `qwen3.5:9b` (thinking ✅, reliable tools, 63 tok/s, 6.6GB)
+- Code generation / debugging → `gemma4:12b` (native tools ✅, correct algorithm, best long-ctx, 43 tok/s)
+- Vision / chart / image inputs → `minicpm-v4.5:8b` (dedicated vision model, P2-wired)
+- Speed / non-thinking throughput → `danielsheep/gpt-oss-20b-Unsloth` (97 tok/s, native tools ✅, 100% GPU at 32k)
+**Removed from routing candidates (benchmark findings, see D26, D27):**
+- `qwen2.5-coder:latest` — tool calls output as plain text, not native API; wrong Python algorithm
+- `deepseek-coder:latest` — 400 error on tool payload, broken code output, hangs at 32k
 **Files likely touched:** `lincoln_ollama_service.py`, `lincoln_routes_chat.py`,
 `lincoln_tool_schemas.py`, `lincoln_chat.js` (model pill UI update)
 **Decision needed:** Whether model routing is per-message or per-session.
-**Status:** Not started.
+**Status:** Not started. Routing matrix is now data-backed (D29) — ready to build when prioritised.
 
 ### T1-B: Self-Indexing
 **What:** Lincoln RAG-indexes its own source code into a separate ChromaDB collection

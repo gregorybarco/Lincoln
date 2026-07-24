@@ -2,14 +2,13 @@
 **Path on disk:** `B:\Homebrewed_AI\Lincoln\build_decisions\CLAUDE-FILES\lincoln-shared-memory.md`
 **Authority:** This file is the shared source of truth between Project A (original Claude instance) and Project B (sister Claude instance on a different machine/account).
 **Update rule:** Any Claude instance that makes a confirmed deployment must update this file in the same session. A change is not "done" until it appears here with a verified date.
-**Last updated:** 2026-07-24
+**Last updated:** 2026-07-24 (model benchmark session — D23–D29 added)
 
 ---
 
 ## 1. CONFIRMED LIVE STATE (as of 2026-07-24)
 
-Everything below is confirmed built, deployed locally to `B:\Homebrewed_AI\Lincoln`, and pushed to `github.com/gregorybarco/Lincoln` on `main` branch. Reference commit: `dcab251` ("0.7.4 - Fixed token showing- settings- web agent search").
-
+Everything below is confirmed built and deployed locally to `B:\Homebrewed_AI\Lincoln`. Reference commit: `dcab251` ("0.7.4 - Fixed token showing- settings- web agent search"). **Note:** D22, T1-F, and model eval harness (D23–D29) are deployed locally but not yet pushed to GitHub — GitHub is stale by two sessions. Local disk is ground truth.
 | Feature | Status | Files Changed | Notes |
 |---|---|---|---|
 | ReAct loop (3-tier tool system) | ✅ Live | `lincoln_routes_chat.py`, `lincoln_tool_schemas.py` | SAFE/SEARCH/WRITE tiers, approval card for WRITE |
@@ -46,8 +45,8 @@ Everything below is confirmed built, deployed locally to `B:\Homebrewed_AI\Linco
 | Sidebar resize ID fix | ✅ Live | `lincoln_sidebar.js`, `lincoln_main.css` | `#sidebar` → `#lincolnSidebar` — sidebar drag-to-resize now targets the correct element |
 | Memory edit/append UI (T1-F) | ✅ Live | `lincoln_database.py`, `lincoln_routes_history.py`, `lincoln_sidebar.js`, `lincoln_main.css` | Inline click-to-edit on entries, "Add memory" button for manual append, tag dropdown locked to 6 tags, empty-save disables Save button. New: `update_memory_entry()`, `PUT /api/history/memory/<id>`, `POST /api/history/memory`. Multi-select checkbox + bulk delete is a separate, pre-existing feature (predates T1-F, see D16) — always available, not toggled by this work. Deployed and smoke-tested 2026-07-24 including refresh-persistence check. |
 | PROTECTED_FUNCTIONS.md updated for T1-F | ✅ Live | `build_decisions/PROTECTED_FUNCTIONS.md` | Added 5 new `lincolnSidebar` functions (`editMemoryEntry`, `saveMemoryEdit`, `cancelMemoryEdit`, `openAddMemoryForm`, `saveNewMemory`) and 2 new `lincoln_database.py` functions (`save_memory_entry`, `update_memory_entry`) to protected lists + regex checker patterns, per new mandatory step 8 in Session Handoff Protocol (see D17). |
-
----
+| Context window VRAM ceiling (Settings > Models slider) | ✅ Live | `lincoln_database.py`, `lincoln_ollama_service.py`, `lincoln_routes_settings.py`, `lincoln_settings.js`, `lincoln_main.css` | `max_context_tokens` DB setting (default 16384), caps `resolve_hardware_ceiling()` regardless of model's native max context. Prevents cudaMalloc OOM crash from oversized KV cache allocation. |
+| Model evaluation harness | ✅ Live | `scripts/lincoln_model_eval.py` | Standalone script, zero Lincoln-core imports, safe to run any time. 5 fixed tasks: domain reasoning, tool-call schema compliance, Python coding, long-context, sanity check. Logs tok/s, VRAM delta, thinking text, processor split, tool call validity. Args: `--models`, `--tasks`, `--long-context-file`, `--task-timeout` (default 120s wall-clock per task via threading — skips stalled models cleanly). Full 6-model run confirmed 2026-07-24. |---
 
 ## 2. CONFIRMED PENDING (nothing as of 2026-07-24)
 
@@ -64,6 +63,7 @@ Items that remain aspirational / roadmap only (NOT in the active build queue) �
 - Agentic web browsing (Playwright/Selenium via WSL) — T2-B
 - Bloomberg/Schwab terminal data extraction pipeline — T2-C
 - QLoRA fine-tuning on RTX 5060 Ti 16GB — T3-A
+- 
 
 ---
 
@@ -169,8 +169,14 @@ Decisions with rationale. Both instances treat these as authoritative unless exp
 | D19 | Single canonical file tree: `build_decisions/CLAUDE-FILES/Lincoln-file-tree.md` | Root `LINCOLN_FILE_TREE.txt` and `build_decisions/LINCOLN_FILE_TREE.md` were stale duplicates. Both deleted and untracked. | 2026-07-24 | No |
 | D20 | `.gitignore` additions: aider local-state files, `*.obj`, `lincoln_sandbox_exec` | Aider cache/history files and manual sandbox build byproducts were being tracked. Source files (`.aider.conf.yml`, `lincoln_sandbox.f90`) intentionally kept tracked — sandbox `.f90` is a useful hand-maintained test file, not AI-generated scratch work. | 2026-07-24 | Yes |
 | D21 | `CHANGELOG.md` deleted, superseded by shared memory §1 | Stopped at v0.3.0, six versions behind. Shared memory already tracks live state with more detail and rationale. Pre-v0.4 history preserved in git log if ever needed. Dead link to it also removed from `Lincoln-file-tree.md` ROOT FILES section. | 2026-07-24 | Yes (git history) |
-
----
+| D22 | Add max_context_tokens hard ceiling, capped in resolve_hardware_ceiling() | deepseek-r1:14b crashed Ollama with a cudaMalloc OOM (9GB KV cache alloc) when a separate Ollama desktop client's context slider was left at its 256k default. resolve_hardware_ceiling() previously had no VRAM-aware limit — used the model's native max (often 128k+) unconditionally. | 2026-07-24 | Yes |
+| D23 | Model evaluation harness added as `scripts/lincoln_model_eval.py` | Needed structured, repeatable comparison of models across Lincoln-relevant task categories before T1-A routing decisions. Standalone, zero Lincoln-core imports. Wall-clock timeout (threading, 120s default) added after deepseek-coder:latest hung indefinitely on 32k context. Supports `--tasks` filter to resume partial runs. | 2026-07-24 | Yes |
+| D24 | deepseek-r1:14b benched — not suitable for Lincoln's ReAct loop | Two confirmed tool-call failures across two independent runs: fabricated a detailed wrong answer (invented "ContextWindowConfig" class, YAML configs, 2048-token defaults) instead of calling `read_file`. At 32k context: 93% CPU offload, 17 tok/s vs 61 tok/s for qwen3.5 on GPU. Tool call failure is disqualifying for a ReAct-loop agent regardless of reasoning quality. | 2026-07-24 | Yes — revisit if tool-call failure is specifically diagnosed |
+| D25 | gemma4:12b elevated to strong general model — code routing target for T1-A | Benchmark showed gemma4 outperformed qwen2.5-coder on all relevant metrics: native tool calls (gemma4 ✅ / qwen2.5-coder ❌ outputs JSON-as-text), correct Python algorithm (gemma4 ✅ / qwen2.5-coder ❌ uses global max instead of running peak), long-context accuracy (gemma4 named all 3 DB-reading functions; qwen2.5-coder missed 2 of 3), best domain reasoning structure. Closes Q2. | 2026-07-24 | Yes |
+| D26 | qwen2.5-coder:latest has no role in Lincoln's current stack | Despite specialist label: (1) does not use native Ollama tool-calling API — outputs `{"name":..., "arguments":...}` as plain text in response body, invisible to `message.get("tool_calls")` in `_react_loop`. (2) max drawdown implementation uses global `max(prices)` instead of running peak — fundamentally wrong algorithm, broken test assertions included. Not suitable for code routing or ReAct. | 2026-07-24 | Yes — revisit if a future version fixes native tool calling |
+| D27 | deepseek-coder:latest (776MB) has no role in Lincoln | 400 Client Error on tool-call payload (Ollama rejects native tools at this size). Broken Python output (unclosed strings, pseudocode mixed with syntax, square-bracket function calls). Hallucinated context: claimed BARCO/OptionsPricing is "a Deepseek software project." Hung indefinitely on 32k context task. 319 tok/s is irrelevant when every output is wrong or broken. | 2026-07-24 | No — 776MB is below the floor for coherent output on Lincoln tasks |
+| D28 | danielsheep/gpt-oss-20b-Unsloth confirmed as T1-A speed/throughput routing candidate | Fastest in cohort (92–99 tok/s across all tasks), native tool calls ✅, 100% GPU at 32k ✅, no thinking. Best response quality on tasks 1 and 3 (cleanest Fortran architecture, cleanest Python). Trade-off: 12GB VRAM vs 6.6GB for qwen3.5, community mirror not official release. Role: non-thinking speed target for T1-A routing once built. Not a replacement for qwen3.5 as default ReAct model. | 2026-07-24 | Yes |
+| D29 | T1-A routing matrix finalized from benchmark data — replaces prior speculative assignment | Prior T1-A proposal used qwen2.5-coder for code and deepseek-coder for lightweight — both disproven by benchmark. Validated matrix: default/agentic/ReAct/thinking → qwen3.5:9b; code tasks → gemma4:12b; vision → minicpm-v4.5:8b; speed/non-thinking → gpt-oss-20b-Unsloth (when T1-A is built). deepseek-coder and qwen2.5-coder removed from routing candidates entirely. | 2026-07-24 | Yes — revisit as new models are added to Ollama |---
 
 ## 6. TERMINOLOGY
 
@@ -201,10 +207,11 @@ Things neither instance has fully resolved. Don't silently pick an answer — su
 | ID | Question | Status | Owner |
 |---|---|---|---|
 | Q1 | Git Desktop authorship issue — what's the actual fix? | Unresolved (F9 above) | User to investigate |
-| Q2 | Gemma4:12b code quality vs Qwen3.5:9b — which is better for code tasks? | Not benchmarked | Next session when relevant |
+| Q2 | Gemma4:12b code quality vs Qwen3.5:9b — which is better for code tasks? | ✅ Answered — gemma4 wins: native tools, correct algorithm, best long-ctx accuracy. See D25. | Closed |
 | Q3 | Should execution isolation (subprocess → sandbox) be P1 of the next build queue? | Not decided | Ask user |
 | Q4 | How should the two Claude instances divide work? | Proposed model below in §8 | Both instances to agree |
-
+| Q5 | "Last session" context-strip banner shows in UI but doesn't reach the model — why? | Confirmed broken: deepseek-r1:14b denied receiving any prior session context when asked directly. Likely in `lincoln_routes_history.py` or `lincoln_routes_chat.py`. Not yet debugged. | Unresolved |
+| Q6 | Is P3b SSE `ctx_update` displaying allocated `num_ctx` as actual tokens used? | Suspected from log timing — ~10k flash matching `window=8192` allocation, correcting down after response completes. Inferred from timestamps, not from reading the SSE handler code. Separate from Q5. | Unresolved |
 ---
 
 ## 8. DUAL-INSTANCE COLLABORATION MODEL
@@ -243,13 +250,16 @@ Things neither instance has fully resolved. Don't silently pick an answer — su
 **Intel oneAPI:** `C:\Program Files (x86)\Intel\oneAPI`
 **nvfortran:** `/opt/nvidia/hpc_sdk/Linux_x86_64/26.3/compilers/bin/nvfortran` (via WSL)
 
-**Models in Ollama:**
-- `qwen3.5:9b` — default chat/agentic (6.6GB)
-- `gemma4:12b` — available, not benchmarked for code (7.6GB)
-- `qwen2.5-coder:latest` — specialist code (4.7GB)
-- `deepseek-coder:latest` — lightweight code (776MB)
-- `minicpm-v4.5:8b` — vision/multimodal (6.1GB), wired as of 2026-07-23
-- `nomic-embed-text` — fixed embed model
+**Models in Ollama (benchmark status as of 2026-07-24):**
+- `qwen3.5:9b` — **default**, all chat/agentic/ReAct tasks (6.6GB, 63 tok/s, native tools ✅, thinking ✅, 100% GPU)
+- `gemma4:12b` — **code routing target for T1-A**; native tools ✅, correct code, best long-ctx (7.6GB, 43 tok/s, 100% GPU)
+- `danielsheep/gpt-oss-20b-Unsloth` — **T1-A speed candidate**; fastest in cohort, no thinking (12GB, 97 tok/s, native tools ✅, 100% GPU at 32k)
+- `deepseek-r1:14b` — **benched**; tool call fabrication + 93% CPU at 32k (8–13GB, 17–41 tok/s — see D24)
+- `qwen2.5-coder:latest` — **no role**; tool calls as plain text, broken Python algorithm (4.7GB — see D26)
+- `deepseek-coder:latest` — **no role**; 400 on tools, broken output, hangs at 32k (776MB — see D27)
+- `minicpm-v4.5:8b` — **vision only**, wired as of 2026-07-23 (6.1GB)
+- `llama3.2:1b` — pulled as network test only, no Lincoln role (1.3GB)
+- `nomic-embed-text` — fixed embed model, not switchable
 
 ---
 
