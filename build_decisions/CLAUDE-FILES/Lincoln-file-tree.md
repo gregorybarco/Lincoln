@@ -50,7 +50,6 @@ https://raw.githubusercontent.com/gregorybarco/Lincoln/main/lincoln_start.bat
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/lincoln_create_shortcut.bat
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/lincoln_icon_generator.py
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/README.md
-https://raw.githubusercontent.com/gregorybarco/Lincoln/main/CHANGELOG.md
 https://raw.githubusercontent.com/gregorybarco/Lincoln/main/requirements.txt
 
 ## BUILD DECISIONS / DOCS

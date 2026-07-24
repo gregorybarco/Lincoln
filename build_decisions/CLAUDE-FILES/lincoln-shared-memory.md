@@ -133,7 +133,14 @@ Failures, dead ends, and known traps. Both instances must read this before debug
 - **Symptom:** File parses inconsistently; sections silently drift out of sync across several small patches without any single patch looking wrong in isolation.
 - **Fix:** For structural edits (table rows, section headers), prefer a full-file review and, when several small issues stack up, a full-file rewrite rather than another incremental patch — smaller patches compound drift risk on markdown structure.
 
+### F11: Confirmed non-issue — chat-executed sandbox code never enters the repo
+- **What was checked:** Whether Python/Fortran/C/C++/Julia/R/Bash/Maple code run via the chat sandbox (`lincoln_jupyter_service.py`) could leak into git.
+- **Finding:** All non-Python languages write to the Windows system temp folder (`tempfile.gettempdir()`) with random `lincoln_<uuid8>.<ext>` filenames — never inside the repo directory. Python execution never touches disk at all; it runs in a persistent in-memory Jupyter kernel (`JupyterSandbox.execute_python`).
+- **Conclusion:** No fix was needed. The repo-root `lincoln_sandbox.f90`/`.obj`/`_exec` files found during the Q8 cleanup were unrelated manual test files (wrong filename pattern, wrong location for the chat-driven path) — not evidence of a leak.
+- **Rule:** Don't re-investigate this path again without new evidence; it's structurally isolated by design.
+
 ---
+
 
 ## 5. DECISION LOG
 
@@ -159,6 +166,9 @@ Decisions with rationale. Both instances treat these as authoritative unless exp
 | D16 | Multi-select (checkbox + bulk delete) is a baseline pattern for all sidebar list panels, not a per-feature toggle | Established in the History panel first; carried forward as the default when the Memory panel was built. Any future sidebar list-type panel should include multi-select + bulk delete by default unless there's a specific reason not to. | 2026-07-24 | Yes, with care |
 | D17 | PROTECTED_FUNCTIONS.md check added as mandatory session-close step | T1-F added 7 new functions across `lincolnSidebar` and `lincoln_database.py` that weren't checked against the protected-functions list until asked, after the feature was already marked complete. Now step 8 in the Session Handoff Protocol (master handoff §9). | 2026-07-24 | Yes |
 | D18 | Full-file rewrite preferred over incremental patches once markdown structural drift is detected | A stacked sequence of small find/replace patches to this file left a broken table row, a dropped section header, an uncleared file lock, and a misplaced table row (see F10). Once 2+ structural issues are found in the same file, rewrite the whole file rather than patching further. | 2026-07-24 | Yes |
+| D19 | Single canonical file tree: `build_decisions/CLAUDE-FILES/Lincoln-file-tree.md` | Root `LINCOLN_FILE_TREE.txt` and `build_decisions/LINCOLN_FILE_TREE.md` were stale duplicates. Both deleted and untracked. | 2026-07-24 | No |
+| D20 | `.gitignore` additions: aider local-state files, `*.obj`, `lincoln_sandbox_exec` | Aider cache/history files and manual sandbox build byproducts were being tracked. Source files (`.aider.conf.yml`, `lincoln_sandbox.f90`) intentionally kept tracked — sandbox `.f90` is a useful hand-maintained test file, not AI-generated scratch work. | 2026-07-24 | Yes |
+| D21 | `CHANGELOG.md` deleted, superseded by shared memory §1 | Stopped at v0.3.0, six versions behind. Shared memory already tracks live state with more detail and rationale. Pre-v0.4 history preserved in git log if ever needed. Dead link to it also removed from `Lincoln-file-tree.md` ROOT FILES section. | 2026-07-24 | Yes (git history) |
 
 ---
 
@@ -194,8 +204,6 @@ Things neither instance has fully resolved. Don't silently pick an answer — su
 | Q2 | Gemma4:12b code quality vs Qwen3.5:9b — which is better for code tasks? | Not benchmarked | Next session when relevant |
 | Q3 | Should execution isolation (subprocess → sandbox) be P1 of the next build queue? | Not decided | Ask user |
 | Q4 | How should the two Claude instances divide work? | Proposed model below in §8 | Both instances to agree |
-| Q7 | `CHANGELOG.md` at repo root stops at `[0.3.0]` (2026-07-17) and doesn't reflect v0.4.0 through v0.7.4, Navigator codename, P1-P4, or T1-F. Is it still considered a live document, or has `lincoln-shared-memory.md` fully superseded it? | Unresolved — flagged 2026-07-24, not yet acted on | Ask user |
-| Q8 | Root directory contains several likely-cache/artifact files (`.aider.tags.cache.v4`, `.aider.chat.history.md`, `.aider.input.history`, `--psm.txt`, `lincoln_sandbox.obj`, `lincoln_sandbox_exec`) and a possibly-stale `LINCOLN_FILE_TREE.txt` that may duplicate `Lincoln-file-tree.md`. Should these be gitignored/cleaned up, and is `LINCOLN_FILE_TREE.txt` still maintained? | Unresolved — flagged 2026-07-24, `.gitignore` not yet reviewed | Ask user, needs `.gitignore` contents |
 
 ---
 
