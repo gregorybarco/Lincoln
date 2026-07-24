@@ -28,6 +28,17 @@ const lincolnSettings = (() => {
   let _activeTab   = 'appearance';
   let activeModel  = null;
 
+  // Discrete steps for the max-context slider, mirroring Ollama's own
+  // desktop app (4k/8k/16k/32k/64k/128k/256k). The slider itself moves
+  // in even index steps (0-6); actual token counts are looked up here.
+  const _CTX_STEPS  = [4096, 8192, 16384, 32768, 65536, 131072, 262144];
+  const _CTX_LABELS = ['4k', '8k', '16k', '32k', '64k', '128k', '256k'];
+
+  function _ctxIndexForValue(tokens) {
+    const idx = _CTX_STEPS.indexOf(Number(tokens));
+    return idx >= 0 ? idx : 2; // default to 16k if stored value is off-grid
+  }
+
   // ── Open / close ──────────────────────────────────────────────────────────
 
   function open() {
@@ -150,13 +161,49 @@ const lincolnSettings = (() => {
         </select>
       </div>
       <div class="settings-field">
-        <label class="settings-label">Font family</label>
-        <select class="settings-select" id="fontFamilySelect" data-key="ui_font_family">
-          <option value="system-ui">System default</option>
-        </select>
-        <p class="settings-hint">Applied to all Lincoln UI text.</p>
+        <label class="settings-label">Ollama response timeout (seconds)</label>
+        <input class="settings-input" type="number" min="30" max="600"
+          data-key="ollama_timeout_sec" value="${_esc(_v('ollama_timeout_sec', '180'))}">
+        <p class="settings-hint">
+          How long Lincoln waits for a streaming response before giving up.
+          Increase for very long Fortran analysis or large document tasks.
+        </p>
+      </div>
+
+      <div class="settings-field">
+        <label class="settings-label">Max context window (VRAM ceiling)</label>
+        <input type="range" class="settings-range" id="maxCtxRange"
+          min="0" max="6" step="1"
+          value="${_ctxIndexForValue(_v('max_context_tokens', '16384'))}"
+          oninput="lincolnSettings.onMaxCtxInput(this.value)"
+          onchange="lincolnSettings.onMaxCtxChange(this.value)">
+        <div class="settings-slider-ticks">
+          <span>4k</span><span>8k</span><span>16k</span><span>32k</span>
+          <span>64k</span><span>128k</span><span>256k</span>
+        </div>
+        <input type="hidden" id="maxCtxHidden" data-key="max_context_tokens"
+          value="${_esc(_v('max_context_tokens', '16384'))}">
+        <p class="settings-hint">
+          Hard ceiling on the context window Lincoln will ever request from
+          Ollama, regardless of a model's native max. Prevents a KV cache
+          allocation larger than your GPU's VRAM (16GB), which crashes
+          Ollama with a cudaMalloc out-of-memory error at request time.
+          Current: <strong id="maxCtxLabel">${_CTX_LABELS[_ctxIndexForValue(_v('max_context_tokens', '16384'))]}</strong>
+        </p>
       </div>
     `;
+  }
+
+  function onMaxCtxInput(index) {
+    const label = document.getElementById('maxCtxLabel');
+    if (label) label.textContent = _CTX_LABELS[index];
+  }
+
+  function onMaxCtxChange(index) {
+    const hidden = document.getElementById('maxCtxHidden');
+    if (hidden) hidden.value = _CTX_STEPS[index];
+    onMaxCtxInput(index);
+    _saveUserSettings();
   }
 
   // ── Section: Chat ─────────────────────────────────────────────────────────
@@ -929,6 +976,8 @@ function _sectionWebSearch() {
     toggleAdminMode,
     toggleModelDropdown,
     selectModel,
+    onMaxCtxInput,
+    onMaxCtxChange,
     addPromptBlock,
     _updatePromptField,
     _deletePromptBlock,

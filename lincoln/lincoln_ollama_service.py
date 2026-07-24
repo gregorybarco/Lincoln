@@ -152,21 +152,52 @@ def _estimate_tokens(messages: list[dict]) -> int:
     return int((total_chars / 4) * 1.10)
 
 
+def _get_max_context_ceiling() -> int:
+    """
+    Read max_context_tokens from DB settings at call time (Settings > Models).
+
+    User-configured hard ceiling that prevents Lincoln from requesting a
+    context window larger than the machine's VRAM can hold. Without this,
+    resolve_hardware_ceiling() falls back to the model's native max context
+    (often 128k+), which can size a KV cache buffer larger than available
+    VRAM and crash Ollama with a cudaMalloc out-of-memory error at request
+    time -- exactly the failure seen 2026-07-24 with deepseek-r1:14b at a
+    256k context setting on a 16GB card.
+    """
+    try:
+        from lincoln.lincoln_database import get_setting
+        return int(get_setting("max_context_tokens", "16384"))
+    except Exception:
+        return 16384
+
+
 def resolve_hardware_ceiling(model: str) -> int:
-    if model in _ctx_cache:
-        return _ctx_cache[model]
+    """
+    Resolve the effective context ceiling for a model: the smaller of the
+    model's native max context and the user-configured max_context_tokens
+    ceiling.
 
-    info       = _fetch_model_info(model)
-    native_ctx = _parse_native_ctx(info)
+    Native ctx is fetched from Ollama once per model and cached in
+    _native_cache -- it never changes for a given model. The user ceiling
+    is re-read from the DB on every call (cheap local SQLite read) so a
+    change to the Settings > Models slider takes effect on the very next
+    request, with no restart required.
+    """
+    if model in _native_cache:
+        native_ctx = _native_cache[model]
+    else:
+        info       = _fetch_model_info(model)
+        native_ctx = _parse_native_ctx(info)
+        _native_cache[model] = native_ctx
 
-    _ctx_cache[model]    = native_ctx
-    _native_cache[model] = native_ctx
+    user_ceiling  = _get_max_context_ceiling()
+    effective_ctx = min(native_ctx, user_ceiling)
 
     print(
         f"[Lincoln] ctx ceiling -- model={model} "
-        f"native={native_ctx} -> hardware_max={native_ctx}"
+        f"native={native_ctx} user_ceiling={user_ceiling} -> hardware_max={effective_ctx}"
     )
-    return native_ctx
+    return effective_ctx
 
 
 def resolve_num_ctx_for_request(model: str, messages: list[dict]) -> int:

@@ -138,6 +138,8 @@ _DEFAULT_SETTINGS = {
     # Ollama / LLM
     "ollama_timeout_sec":           "180",
     "web_search_enabled":           "false",
+    "max_context_tokens":           "16384",
+    "web_search_enabled":           "false",
     # Build tools (your machine -- editable from UI)
     "nvfortran_path":               "/opt/nvidia/hpc_sdk/Linux_x86_64/26.3/compilers/bin/nvfortran",
     "f2py_fcompiler_flag":          "nv",
