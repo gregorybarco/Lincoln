@@ -69,7 +69,7 @@ Items that remain aspirational / roadmap only (NOT in the active build queue):
 
 | File | Locked by | Task | Status |
 |---|---|---|---|
-| — | — | — | No active locks |
+| lincoln-roadmap.md | Project B | Adding T1-F (Memory edit/append UI) spec | Locked |
 
 **Rule:** Before patching any file, check this table. If locked, coordinate with the other instance before proceeding.
 

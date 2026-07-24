@@ -86,8 +86,18 @@ outside designated sandbox path) before Lincoln can be trusted with autonomous
 code execution.
 **Constraint:** No Docker. Isolation via Python `multiprocessing` + restricted
 builtins or a chroot-style WSL sandbox.
-**Files likely touched:** `lincoln_jupyter_service.py`
-**Status:** Not started. Required before Tier 2 agentic code tasks.
+
+### T1-F: Memory Edit/Append UI
+**What:** Manual CRUD interface for `lincoln_memory_entries` in the sidebar
+memory panel. Inline edit on existing entries (click entry → editable → save)
+and an "Add memory" button for manual append. Tag dropdown locked to the six
+existing tags (`preference`, `decision`, `constraint`, `fact`, `code_style`, `persona`).
+**Constraint:** Not a ReAct tool — no approval card. Pure UI CRUD, user-initiated
+only. All writes go through `save_memory_entry()`, never raw SQL (per F4).
+**Files likely touched:** `lincoln_routes_history.py` (backend), `lincoln_sidebar.js`
+(frontend memory panel)
+**Status:** Not started. Logged 2026-07-23, added to roadmap same day after
+being caught missing on first mention.
 
 ---
 

@@ -1138,7 +1138,7 @@ function _sessionHTML(s, idx) {
   // ── Sidebar drag-to-resize ────────────────────────────────────────────────
 
   function _setupSidebarResize() {
-    const sidebar = document.getElementById('sidebar');
+    const sidebar = document.getElementById('lincolnSidebar');
     if (!sidebar) return;
 
     // Create drag handle and inject it
