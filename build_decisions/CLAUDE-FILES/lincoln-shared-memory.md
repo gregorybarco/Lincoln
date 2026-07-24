@@ -2,7 +2,7 @@
 **Path on disk:** `B:\Homebrewed_AI\Lincoln\build_decisions\CLAUDE-FILES\lincoln-shared-memory.md`
 **Authority:** This file is the shared source of truth between Project A (original Claude instance) and Project B (sister Claude instance on a different machine/account).
 **Update rule:** Any Claude instance that makes a confirmed deployment must update this file in the same session. A change is not "done" until it appears here with a verified date.
-**Last updated:** 2026-07-23
+**Last updated:** 2026-07-24
 
 ---
 
@@ -41,26 +41,30 @@ Everything below is confirmed built, deployed locally to `B:\Homebrewed_AI\Linco
 | System prompt 4 active blocks | ✅ Live | `lincoln_database.py` (seeded) | Lincoln persona, Life cycle, Memory Save Behavior, Tool Chaining Mandate |
 | Four active DB system prompt blocks | ✅ Live | `lincoln_database.py` | Scope=global, persistent, survives restarts |
 | Ban list checker | ✅ Live | `lincoln_ban_list_checker.py`, `lincoln_routes_chat.py` | Fires warning banner on OptionsPricing generated code |
-| Memory edit/append UI (T1-F) | ✅ Live | `lincoln_database.py`, `lincoln_routes_history.py`, `lincoln_sidebar.js`, `lincoln_main.css` | Inline click-to-edit on entries, "Add memory" button for manual append, tag dropdown locked to 6 tags, empty-save disables Save button. New: `update_memory_entry()`, `PUT/POST /api/history/memory`. Multi-select checkbox + bulk delete is a separate, pre-existing feature (predates T1-F) — always available, not toggled by this work. || Version badge single-instance fix | ✅ Live | lincoln_index.html | Removed 2 duplicate sidebar-logo divs; one span with id="sidebarVersionDisplay" remains |
-| Routes comment hygiene cleanup | ✅ Live | lincoln_routes_chat.py | Removed duplicate "ReAct loop" header (line 585) and stale P3 patch-instruction banner |
+| Version badge single-instance fix | ✅ Live | `lincoln_index.html` | Removed 2 duplicate sidebar-logo divs; one span with `id="sidebarVersionDisplay"` remains |
+| Routes comment hygiene cleanup | ✅ Live | `lincoln_routes_chat.py` | Removed duplicate "ReAct loop" header (line 585) and stale P3 patch-instruction banner |
+| Sidebar resize ID fix | ✅ Live | `lincoln_sidebar.js`, `lincoln_main.css` | `#sidebar` → `#lincolnSidebar` — sidebar drag-to-resize now targets the correct element |
+| Memory edit/append UI (T1-F) | ✅ Live | `lincoln_database.py`, `lincoln_routes_history.py`, `lincoln_sidebar.js`, `lincoln_main.css` | Inline click-to-edit on entries, "Add memory" button for manual append, tag dropdown locked to 6 tags, empty-save disables Save button. New: `update_memory_entry()`, `PUT /api/history/memory/<id>`, `POST /api/history/memory`. Multi-select checkbox + bulk delete is a separate, pre-existing feature (predates T1-F, see D16) — always available, not toggled by this work. Deployed and smoke-tested 2026-07-24 including refresh-persistence check. |
+| PROTECTED_FUNCTIONS.md updated for T1-F | ✅ Live | `build_decisions/PROTECTED_FUNCTIONS.md` | Added 5 new `lincolnSidebar` functions (`editMemoryEntry`, `saveMemoryEdit`, `cancelMemoryEdit`, `openAddMemoryForm`, `saveNewMemory`) and 2 new `lincoln_database.py` functions (`save_memory_entry`, `update_memory_entry`) to protected lists + regex checker patterns, per new mandatory step 8 in Session Handoff Protocol (see D17). |
 
 ---
 
 ## 2. CONFIRMED PENDING (nothing as of 2026-07-24)
 
-**The P1–P4 queue is fully complete.** There is no confirmed pending feature queue at this time. The next session should ask the user what to build next.
+**The P1–P4 queue and T1-F are fully complete.** There is no confirmed pending feature queue at this time. The next session should ask the user what to build next.
 
-Items that remain aspirational / roadmap only (NOT in the active build queue):
+Items that remain aspirational / roadmap only (NOT in the active build queue) — see `lincoln-roadmap.md` for full detail:
 
-- Execution isolation (subprocess → sandboxed env)
-- Self-indexing (Lincoln RAG over own source, read-only)
-- Self-introspection agentic (propose patches via Aider, never auto-apply)
-- Model routing (specialist models per task type: Qwen → chat, qwen2.5-coder → code, MiniCPM → vision)
-- QLoRA fine-tuning on RTX 5060 Ti 16GB
-- Bloomberg/Schwab terminal data extraction pipeline
-- Agentic web browsing (Playwright/Selenium via WSL)
-- Duplicate version badge in topbar (Q5) — cosmetic, low priority
-- lincoln_routes_chat.py comment hygiene (Q6) — cosmetic, low priority
+- Execution isolation (subprocess → sandboxed env) — T1-E
+- Self-indexing (Lincoln RAG over own source, read-only) — T1-B
+- Multi-iterative web search — T1-C
+- Think Mode rebuild (regressed since v0.5.x) — T1-D
+- Model routing (specialist models per task type) — T1-A
+- Self-introspection agentic (propose patches via Aider, never auto-apply) — T2-A
+- Agentic web browsing (Playwright/Selenium via WSL) — T2-B
+- Bloomberg/Schwab terminal data extraction pipeline — T2-C
+- QLoRA fine-tuning on RTX 5060 Ti 16GB — T3-A
+
 ---
 
 ## 3. ACTIVE FILE LOCKS
@@ -69,7 +73,7 @@ Items that remain aspirational / roadmap only (NOT in the active build queue):
 
 | File | Locked by | Task | Status |
 |---|---|---|---|
-| lincoln-roadmap.md | Project B | Adding T1-F (Memory edit/append UI) spec | Locked |
+| — | — | — | No active locks |
 
 **Rule:** Before patching any file, check this table. If locked, coordinate with the other instance before proceeding.
 
@@ -107,7 +111,7 @@ Failures, dead ends, and known traps. Both instances must read this before debug
 
 ### F6: CDN edge cache on raw.githubusercontent.com
 - **What happened:** Fetching a raw GitHub file returned old content even after a push. Led Project B (sister instance) to initially conclude the repo was out of sync, when the file on disk was correct.
-- **Fix:** When verifying sync state, prefer `github.com/blob/main/<path>` view over `raw.githubusercontent.com`. Or fetch twice and compare.
+- **Fix:** When verifying sync state, prefer `github.com/blob/main/<path>` view over `raw.githubusercontent.com`. Or fetch twice and compare. If a patch doesn't appear to be taking effect and GitHub keeps showing stale content, ask the user to paste local file content directly — local disk is ground truth, GitHub fetch is probably current but not guaranteed.
 - **Rule:** When a live fetch contradicts detailed specific documentation, suspect the fetch first, not the human's workflow.
 
 ### F7: marked.js renderer.code signature change at v9
@@ -123,6 +127,11 @@ Failures, dead ends, and known traps. Both instances must read this before debug
 - **Status:** Unresolved. Git Desktop occasionally refuses to commit due to unknown authorship configuration.
 - **Workaround:** Manual file copy deployment. Don't assume Git Desktop push will work reliably.
 - **Note:** Must be resolved before any automated deployment pipeline is built.
+
+### F10: Multi-part patch with a flawed first draft can leave the file in a broken intermediate state
+- **What happened:** During the T1-F closeout, a Decision Log patch (D17) was first drafted with an error (it duplicated the `## 6. TERMINOLOGY` header), self-corrected in the same reply, but the flawed first version is what actually got applied locally — leaving D17 floating below the `## 6. TERMINOLOGY` header instead of inside the §5 table, and dropping the header itself in a later cleanup pass. Also left the §3 file lock uncleared and produced one concatenated/broken table row in §1 (two rows merged with `||` and no line break).
+- **Symptom:** File parses inconsistently; sections silently drift out of sync across several small patches without any single patch looking wrong in isolation.
+- **Fix:** For structural edits (table rows, section headers), prefer a full-file review and, when several small issues stack up, a full-file rewrite rather than another incremental patch — smaller patches compound drift risk on markdown structure.
 
 ---
 
@@ -148,7 +157,12 @@ Decisions with rationale. Both instances treat these as authoritative unless exp
 | D14 | minicpm-v4.5:8b as default vision_model DB setting | Pulled and confirmed working standalone via Ollama. Used for image/chart inputs. | 2026-07-23 | Yes |
 | D15 | KaTeX only on explicit delimiters ($$, \[..\], \(..\)) | Bare $ caused financial text like "$200 billion" to be parsed as LaTeX. Critical for quant finance use case. | 2026-07-22 | Yes |
 | D16 | Multi-select (checkbox + bulk delete) is a baseline pattern for all sidebar list panels, not a per-feature toggle | Established in the History panel first; carried forward as the default when the Memory panel was built. Any future sidebar list-type panel should include multi-select + bulk delete by default unless there's a specific reason not to. | 2026-07-24 | Yes, with care |
-| D17 | PROTECTED_FUNCTIONS.md check added as mandatory session-close step | T1-F added 7 new functions across lincolnSidebar and lincoln_database.py that weren't checked against the protected-functions list until asked, after the feature was already marked complete. Now step 8 in the Session Handoff Protocol (master handoff §9). | 2026-07-24 | Yes |
+| D17 | PROTECTED_FUNCTIONS.md check added as mandatory session-close step | T1-F added 7 new functions across `lincolnSidebar` and `lincoln_database.py` that weren't checked against the protected-functions list until asked, after the feature was already marked complete. Now step 8 in the Session Handoff Protocol (master handoff §9). | 2026-07-24 | Yes |
+| D18 | Full-file rewrite preferred over incremental patches once markdown structural drift is detected | A stacked sequence of small find/replace patches to this file left a broken table row, a dropped section header, an uncleared file lock, and a misplaced table row (see F10). Once 2+ structural issues are found in the same file, rewrite the whole file rather than patching further. | 2026-07-24 | Yes |
+
+---
+
+## 6. TERMINOLOGY
 
 Shared vocabulary — if either instance uses these terms, they mean exactly this:
 
@@ -161,10 +175,11 @@ Shared vocabulary — if either instance uses these terms, they mean exactly thi
 | lincoln_memory_entries | The correct SQLite table name for memory. NOT `memory_entries` (phantom). |
 | approval card | The inline UI card shown for WRITE_TOOLS requests, with Approve / Deny buttons |
 | canvas | The code block management area in the right panel — run buttons, output panel |
-| P1/P2/P3/P4 | The four priority items defined in LINCOLN_MASTER_HANDOFF.md. All four are now complete. |
+| P1/P2/P3/P4 | The four priority items defined in `lincoln-master-handoff.md`. All four are now complete. |
+| T1-F | Memory Edit/Append UI — Tier 1 roadmap item, complete as of 2026-07-24. See roadmap for full Tier 1/2/3 naming scheme. |
 | hard reload | Ctrl+Shift+R — required after JS/CSS changes to bypass browser cache |
-| multi-select pattern | The checkbox + bulk-select-toolbar + bulk-delete convention (see D16). Baseline for sidebar list panels — currently live in History and Memory panels. |
 | full restart | Ctrl+C + relaunch `lincoln_start.bat` — required after Python file changes |
+| multi-select pattern | The checkbox + bulk-select-toolbar + bulk-delete convention (see D16). Baseline for sidebar list panels — currently live in History and Memory panels. |
 | the stale duplicate | The now-deleted `lincoln/lincoln_routes_settings.py` at the wrong path (not to be confused with the correct `lincoln/app/routes/lincoln_routes_settings.py`) |
 
 ---
@@ -178,7 +193,9 @@ Things neither instance has fully resolved. Don't silently pick an answer — su
 | Q1 | Git Desktop authorship issue — what's the actual fix? | Unresolved (F9 above) | User to investigate |
 | Q2 | Gemma4:12b code quality vs Qwen3.5:9b — which is better for code tasks? | Not benchmarked | Next session when relevant |
 | Q3 | Should execution isolation (subprocess → sandbox) be P1 of the next build queue? | Not decided | Ask user |
-| Q4 | How should the two Claude instances divide work? | Proposed model below in §8 | Both instances to agree | — |
+| Q4 | How should the two Claude instances divide work? | Proposed model below in §8 | Both instances to agree |
+| Q7 | `CHANGELOG.md` at repo root stops at `[0.3.0]` (2026-07-17) and doesn't reflect v0.4.0 through v0.7.4, Navigator codename, P1-P4, or T1-F. Is it still considered a live document, or has `lincoln-shared-memory.md` fully superseded it? | Unresolved — flagged 2026-07-24, not yet acted on | Ask user |
+| Q8 | Root directory contains several likely-cache/artifact files (`.aider.tags.cache.v4`, `.aider.chat.history.md`, `.aider.input.history`, `--psm.txt`, `lincoln_sandbox.obj`, `lincoln_sandbox_exec`) and a possibly-stale `LINCOLN_FILE_TREE.txt` that may duplicate `Lincoln-file-tree.md`. Should these be gitignored/cleaned up, and is `LINCOLN_FILE_TREE.txt` still maintained? | Unresolved — flagged 2026-07-24, `.gitignore` not yet reviewed | Ask user, needs `.gitignore` contents |
 
 ---
 
