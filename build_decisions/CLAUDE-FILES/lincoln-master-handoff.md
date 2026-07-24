@@ -215,6 +215,7 @@ Ask the user what to build next at the start of the next session.
 5. Cross-check — identify anything in recent chats NOT yet captured in shared memory.
 6. Confirm to user: "Reviewed memory, recent chats, handoff doc, shared memory. Pending queue is [X]. What should we build next?"
 7. Only THEN begin any build or patch work.
+8. **Before closing any session that added new functions/methods:** check whether any were added to `lincolnChat`, `lincolnCanvas`, `lincolnSidebar`, `lincolnSettings`, or as new top-level Python functions in `lincoln_database.py`, `lincoln_ollama_service.py`, or `lincoln_routes_chat.py`. If so, update `build_decisions/PROTECTED_FUNCTIONS.md` (function lists + regex patterns) in the same session, before marking the feature complete in shared memory.
 
 If Claude skips this, prompt: **"Check recent chats and memory first."**
 

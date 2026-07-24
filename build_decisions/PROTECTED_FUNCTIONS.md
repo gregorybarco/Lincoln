@@ -84,6 +84,11 @@ of these (e.g. `function sendMessage() { ... }` or
 - `closeProjectSettings`
 - `hasSelection`
 - `clearSelection`
+- `editMemoryEntry`
+- `saveMemoryEdit`
+- `cancelMemoryEdit`
+- `openAddMemoryForm`
+- `saveNewMemory`
 
 ---
 
@@ -130,6 +135,8 @@ functionality if saved via Aider.
 - `get_all_settings`
 - `save_settings`
 - `get_setting`
+- `save_memory_entry`
+- `update_memory_entry`
 
 ### lincoln_ollama_service.py
 - `stream_chat`
@@ -150,11 +157,11 @@ These are the patterns `lincoln_ban_list_checker.py` uses to detect violations.
 Each pattern fires a WARNING (not a block) -- the user can still proceed.
 
 ```
-# Redefines a protected JS namespace
-(?:^|\n)\s*(?:const|let|var|function)\s+(lincolnChat|lincolnCanvas|lincolnSidebar|lincolnSettings|lincolnCanvasUI)\b
-
 # Reassigns a critical Lincoln method
-\b(lincolnChat|lincolnSettings|lincolnCanvas|lincolnSidebar)\.(sendMessage|loadSession|newSession|setActiveProject|open|close|loadModels|toggleModelDropdown|selectModel|addPromptBlock|pinCodeBlock|clear|switchTab|loadHistory|loadMemory)\s*=
+\b(lincolnChat|lincolnSettings|lincolnCanvas|lincolnSidebar)\.(sendMessage|loadSession|newSession|setActiveProject|open|close|loadModels|toggleModelDropdown|selectModel|addPromptBlock|pinCodeBlock|clear|switchTab|loadHistory|loadMemory|editMemoryEntry|saveMemoryEdit|cancelMemoryEdit|openAddMemoryForm|saveNewMemory)\s*=
+
+# Redefines a protected Python function by name
+^\s*def\s+(initialise_database|get_active_system_prompt|stream_chat|chat|build_messages_with_rag_context|resolve_num_ctx_for_request|send_message|create_new_session|save_memory_entry|update_memory_entry)\s*\(
 
 # Redefines a protected Python function by name
 ^\s*def\s+(initialise_database|get_active_system_prompt|stream_chat|chat|build_messages_with_rag_context|resolve_num_ctx_for_request|send_message|create_new_session)\s*\(

@@ -148,10 +148,7 @@ Decisions with rationale. Both instances treat these as authoritative unless exp
 | D14 | minicpm-v4.5:8b as default vision_model DB setting | Pulled and confirmed working standalone via Ollama. Used for image/chart inputs. | 2026-07-23 | Yes |
 | D15 | KaTeX only on explicit delimiters ($$, \[..\], \(..\)) | Bare $ caused financial text like "$200 billion" to be parsed as LaTeX. Critical for quant finance use case. | 2026-07-22 | Yes |
 | D16 | Multi-select (checkbox + bulk delete) is a baseline pattern for all sidebar list panels, not a per-feature toggle | Established in the History panel first; carried forward as the default when the Memory panel was built. Any future sidebar list-type panel should include multi-select + bulk delete by default unless there's a specific reason not to. | 2026-07-24 | Yes, with care |
-
----
-
-## 6. TERMINOLOGY
+| D17 | PROTECTED_FUNCTIONS.md check added as mandatory session-close step | T1-F added 7 new functions across lincolnSidebar and lincoln_database.py that weren't checked against the protected-functions list until asked, after the feature was already marked complete. Now step 8 in the Session Handoff Protocol (master handoff §9). | 2026-07-24 | Yes |
 
 Shared vocabulary — if either instance uses these terms, they mean exactly this:
 
